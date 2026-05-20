@@ -33,6 +33,12 @@ async function getGeminiResponse(userMessage) {
     });
     
     const data = await response.json();
+    console.log('Gemini Response:', JSON.stringify(data));
+    
+    if (!response.ok) {
+      console.error('Gemini API Error:', data);
+      return `خطا: ${data.error?.message || 'مشکل در ارتباط با Gemini'}`;
+    }
     
     if (data.candidates && data.candidates[0] && data.candidates[0].content) {
       return data.candidates[0].content.parts[0].text;
@@ -40,8 +46,8 @@ async function getGeminiResponse(userMessage) {
     
     return 'متاسفم، در حال حاضر نمی‌توانم به سوال شما پاسخ دهم. لطفا دوباره تلاش کنید.';
   } catch (error) {
-    console.error('Gemini API Error:', error);
-    return 'متاسفم، در حال حاضر نمی‌توانم به سوال شما پاسخ دهم. لطفا دوباره تلاش کنید.';
+    console.error('Gemini API Error:', error.message);
+    return `خطا: ${error.message}`;
   }
 }
 
