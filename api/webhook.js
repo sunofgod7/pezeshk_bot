@@ -19,16 +19,35 @@ async function sendMessage(chatId, text) {
 
 async function getGeminiResponse(userMessage) {
   try {
-    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-3.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+    const systemPrompt = `تو یک دکتر بسیار با تجربه و متخصص هستی. وظیفه‌ات کمک به بیماران و پاسخ به سوالات پزشکی آنهاست.
+
+رفتار تو باید این‌گونه باشه:
+- با احترام و دلسوزی با بیماران صحبت کن
+- سوالات دقیق و هدفمند برای تشخیص بهتر بپرس
+- علائم را به دقت بررسی کن
+- توصیه‌های پزشکی مفید و کاربردی بده
+- در صورت لزوم، مراجعه به پزشک متخصص یا اورژانس را توصیه کن
+- از زبان ساده و قابل فهم استفاده کن
+- همیشه هشدار بده که تشخیص نهایی نیاز به معاینه حضوری دارد
+
+سوال بیمار: ${userMessage}`;
+
+    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{
           parts: [{
-            text: userMessage
+            text: systemPrompt
           }]
-        }]
+        }],
+        generationConfig: {
+          temperature: 0.7,
+          topK: 40,
+          topP: 0.95,
+          maxOutputTokens: 1024
+        }
       })
     });
     
