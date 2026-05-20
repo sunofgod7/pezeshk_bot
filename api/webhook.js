@@ -8,22 +8,76 @@ const BALE_API = `https://tapi.bale.ai/bot${BALE_TOKEN}`;
 const userSessions = new Map();
 
 async function sendMessage(chatId, text, replyMarkup = null) {
-  const url = `${BALE_API}/sendMessage`;
-  const body = {
-    chat_id: chatId,
-    text: text
-  };
+  const MAX_LENGTH = 4000; // محدودیت طول پیام در بله
   
-  if (replyMarkup) {
-    body.reply_markup = replyMarkup;
+  // اگر پیام کوتاه است، مستقیم ارسال کن
+  if (text.length <= MAX_LENGTH) {
+    const url = `${BALE_API}/sendMessage`;
+    const body = {
+      chat_id: chatId,
+      text: text
+    };
+    
+    if (replyMarkup) {
+      body.reply_markup = replyMarkup;
+    }
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    return response.json();
   }
   
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  return response.json();
+  // تقسیم پیام به چند قسمت
+  const parts = [];
+  let currentPart = '';
+  const sentences = text.split(/([.!?؟۔]\s+)/);
+  
+  for (let i = 0; i < sentences.length; i++) {
+    const sentence = sentences[i];
+    
+    if ((currentPart + sentence).length <= MAX_LENGTH) {
+      currentPart += sentence;
+    } else {
+      if (currentPart) {
+        parts.push(currentPart.trim());
+      }
+      currentPart = sentence;
+    }
+  }
+  
+  if (currentPart) {
+    parts.push(currentPart.trim());
+  }
+  
+  // ارسال تمام قسمت‌ها
+  for (let i = 0; i < parts.length; i++) {
+    const url = `${BALE_API}/sendMessage`;
+    const body = {
+      chat_id: chatId,
+      text: parts[i]
+    };
+    
+    // فقط در آخرین پیام keyboard رو اضافه کن
+    if (replyMarkup && i === parts.length - 1) {
+      body.reply_markup = replyMarkup;
+    }
+    
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    
+    // تاخیر کوچک بین پیام‌ها
+    if (i < parts.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+  
+  return { ok: true };
 }
 
 function getSession(chatId) {
