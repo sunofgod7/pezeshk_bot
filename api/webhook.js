@@ -63,7 +63,7 @@ async function getGeminiResponse(chatId, userMessage) {
 
 ${conversationHistory ? 'تاریخچه مکالمه:\n' + conversationHistory + '\n\n' : ''}پیام جدید بیمار: ${userMessage}`;
 
-    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-3.5-flash:generateContent?key=${GEMINI_API_KEY}`;
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
