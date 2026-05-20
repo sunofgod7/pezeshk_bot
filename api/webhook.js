@@ -1,12 +1,8 @@
 const fetch = require('node-fetch');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const BALE_TOKEN = process.env.BALE_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const BALE_API = `https://tapi.bale.ai/bot${BALE_TOKEN}`;
-
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
 
 async function sendMessage(chatId, text) {
   const url = `${BALE_API}/sendMessage`;
@@ -23,9 +19,26 @@ async function sendMessage(chatId, text) {
 
 async function getGeminiResponse(userMessage) {
   try {
-    const result = await model.generateContent(userMessage);
-    const response = await result.response;
-    return response.text();
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{
+            text: userMessage
+          }]
+        }]
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (data.candidates && data.candidates[0] && data.candidates[0].content) {
+      return data.candidates[0].content.parts[0].text;
+    }
+    
+    return 'متاسفم، در حال حاضر نمی‌توانم به سوال شما پاسخ دهم. لطفا دوباره تلاش کنید.';
   } catch (error) {
     console.error('Gemini API Error:', error);
     return 'متاسفم، در حال حاضر نمی‌توانم به سوال شما پاسخ دهم. لطفا دوباره تلاش کنید.';

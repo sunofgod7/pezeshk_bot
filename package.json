@@ -8,8 +8,7 @@
     "deploy": "vercel"
   },
   "dependencies": {
-    "node-fetch": "^2.6.7",
-    "@google/generative-ai": "^0.21.0"
+    "node-fetch": "^2.6.7"
   },
   "engines": {
     "node": ">=14.x"
