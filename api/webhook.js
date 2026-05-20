@@ -150,7 +150,7 @@ ${conversationHistory ? 'تاریخچه مکالمه:\n' + conversationHistory +
           temperature: 0.7,
           topK: 40,
           topP: 0.95,
-          maxOutputTokens: 500
+          maxOutputTokens: 20000
         }
       })
     });
