@@ -8,7 +8,7 @@ const BALE_API = `https://tapi.bale.ai/bot${BALE_TOKEN}`;
 const userSessions = new Map();
 
 async function sendMessage(chatId, text, replyMarkup = null) {
-  const MAX_LENGTH = 4000; // محدودیت طول پیام در بله
+  const MAX_LENGTH = 3500; // محدودیت ایمن برای بله
   
   // اگر پیام کوتاه است، مستقیم ارسال کن
   if (text.length <= MAX_LENGTH) {
@@ -30,21 +30,39 @@ async function sendMessage(chatId, text, replyMarkup = null) {
     return response.json();
   }
   
-  // تقسیم پیام به چند قسمت
+  // تقسیم پیام به چند قسمت بر اساس خط جدید و جملات
   const parts = [];
+  const paragraphs = text.split('\n\n');
   let currentPart = '';
-  const sentences = text.split(/([.!?؟۔]\s+)/);
   
-  for (let i = 0; i < sentences.length; i++) {
-    const sentence = sentences[i];
-    
-    if ((currentPart + sentence).length <= MAX_LENGTH) {
-      currentPart += sentence;
+  for (const paragraph of paragraphs) {
+    if ((currentPart + '\n\n' + paragraph).length <= MAX_LENGTH) {
+      currentPart += (currentPart ? '\n\n' : '') + paragraph;
     } else {
       if (currentPart) {
         parts.push(currentPart.trim());
       }
-      currentPart = sentence;
+      
+      // اگر پاراگراف خودش خیلی بلند است
+      if (paragraph.length > MAX_LENGTH) {
+        const sentences = paragraph.match(/[^.!?؟]+[.!?؟]+/g) || [paragraph];
+        let sentencePart = '';
+        
+        for (const sentence of sentences) {
+          if ((sentencePart + sentence).length <= MAX_LENGTH) {
+            sentencePart += sentence;
+          } else {
+            if (sentencePart) {
+              parts.push(sentencePart.trim());
+            }
+            sentencePart = sentence;
+          }
+        }
+        
+        currentPart = sentencePart;
+      } else {
+        currentPart = paragraph;
+      }
     }
   }
   
@@ -73,7 +91,7 @@ async function sendMessage(chatId, text, replyMarkup = null) {
     
     // تاخیر کوچک بین پیام‌ها
     if (i < parts.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 800));
     }
   }
   
@@ -106,7 +124,8 @@ async function getGeminiResponse(chatId, userMessage) {
     const systemPrompt = `تو یک دکتر بسیار با تجربه و متخصص هستی. وظیفه‌ات کمک به بیماران و پاسخ به سوالات پزشکی آنهاست.
 
 رفتار تو باید این‌گونه باشه:
-- با احترام و دلسوزی با بیماران صحبت کن
+- با احترام و دلسوزی با بیماران صحبت کن (بدون تعارفات زیاد)
+- پاسخ‌هایت را کوتاه و مفید نگه دار (حداکثر 3-4 جمله)
 - سوالات دقیق و هدفمند برای تشخیص بهتر بپرس (سن، جنسیت، مدت زمان علائم، شدت درد، سابقه بیماری و...)
 - علائم را به دقت بررسی کن
 - حداقل 3-4 سوال مهم بپرس قبل از اینکه تشخیص نهایی بدی
@@ -131,7 +150,7 @@ ${conversationHistory ? 'تاریخچه مکالمه:\n' + conversationHistory +
           temperature: 0.7,
           topK: 40,
           topP: 0.95,
-          maxOutputTokens: 1024
+          maxOutputTokens: 500
         }
       })
     });
