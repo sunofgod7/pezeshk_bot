@@ -97,8 +97,8 @@ async function getGeminiResponse(chatId, userMessage) {
 
 ${conversationHistory ? "تاریخچه مکالمه:\n" + conversationHistory + "\n\n" : ""}پیام جدید بیمار: ${userMessage}`;
 
-    // تغییر به v1beta و gemini-1.5-flash-latest
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
+    // برگشت به مدل اصلی شما
+    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-3.5-flash:generateContent?key=${GEMINI_API_KEY}`;
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -212,8 +212,8 @@ module.exports = async (req, res) => {
             ? "تو یک دکتر متخصص آزمایشگاه هستی. این تصویر نتایج آزمایش یک بیمار است. لطفا:\n- تمام پارامترهای آزمایش را استخراج کن\n- مقادیر غیرطبیعی را مشخص کن\n- تحلیل کامل و توضیحات ساده ارائه بده\n- توصیه‌های لازم را بده"
             : "تو یک دکتر متخصص هستی. این تصویر مربوط به یک بیمار است. لطفا تصویر را تحلیل کن و توضیحات پزشکی مفید ارائه بده.";
 
-          // تغییر به v1beta و gemini-1.5-flash-latest
-          const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
+          // برگشت به مدل اصلی شما
+          const url = `https://generativelanguage.googleapis.com/v1/models/gemini-3.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
           console.log("Sending to Gemini Vision API...");
           const response = await fetch(url, {
@@ -224,7 +224,7 @@ module.exports = async (req, res) => {
                 {
                   parts: [
                     { text: visionPrompt },
-                    // فرمت صحیح برای API گوگل
+                    // اصلاح اصلی: استفاده از camelCase برای قوانین لود کردن مدیا در گوگل API
                     {
                       inlineData: { mimeType: "image/jpeg", data: base64Image },
                     },
@@ -351,8 +351,8 @@ module.exports = async (req, res) => {
           if (session.labTestMode) {
             const labPrompt = `تو یک دکتر متخصص آزمایشگاه هستی. نتایج آزمایش را تحلیل کن، مقادیر غیرطبیعی را مشخص کن، توضیح ساده بده و توصیه‌های لازم را ارائه کن.\n\nنتایج: ${userMessage}`;
 
-            // تغییر به v1beta و gemini-1.5-flash-latest
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
+            // برگشت به مدل اصلی شما
+            const url = `https://generativelanguage.googleapis.com/v1/models/gemini-3.5-flash:generateContent?key=${GEMINI_API_KEY}`;
             const response = await fetch(url, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
