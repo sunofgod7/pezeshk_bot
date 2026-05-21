@@ -4,7 +4,7 @@ const BALE_TOKEN = process.env.BALE_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const BALE_API = `https://tapi.bale.ai/bot${BALE_TOKEN}`;
 
-const GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_MODEL = "gemini-2.0-flash-exp";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 const userSessions = new Map();
@@ -152,7 +152,7 @@ ${conversationHistory ? "تاریخچه مکالمه:\n" + conversationHistory +
           temperature: 0.7,
           topK: 40,
           topP: 0.95,
-          maxOutputTokens: 8000,
+          maxOutputTokens: 2048,
         },
       }),
     });
@@ -203,7 +203,7 @@ async function analyzeImageWithGemini(fileId, prompt) {
         temperature: 0.7,
         topK: 40,
         topP: 0.95,
-        maxOutputTokens: 8000,
+        maxOutputTokens: 2048,
       },
     }),
   });
@@ -258,10 +258,10 @@ async function analyzeLabTestImage(fileId) {
           },
         ],
         generationConfig: {
-          temperature: 0.4,
-          topK: 40,
-          topP: 0.95,
-          maxOutputTokens: 8000,
+          temperature: 0.5,
+          topK: 32,
+          topP: 0.9,
+          maxOutputTokens: 2048,
         },
       }),
     });
@@ -446,9 +446,9 @@ module.exports = async (req, res) => {
               ],
               generationConfig: {
                 temperature: 0.7,
-                topK: 40,
-                topP: 0.95,
-                maxOutputTokens: 8000,
+                topK: 32,
+                topP: 0.9,
+                maxOutputTokens: 2048,
               },
             }),
           });
