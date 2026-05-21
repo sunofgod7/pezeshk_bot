@@ -10,14 +10,6 @@ const GEMINI_URL = `https://generativelanguage.googleapis.com/v1/models/${GEMINI
 const userSessions = new Map();
 
 // ---------- helpers ----------
-function toBase64(buf) {
-  let binary = "";
-  const CHUNK = 0x8000;
-  for (let i = 0; i < buf.length; i += CHUNK) {
-    binary += String.fromCharCode.apply(null, buf.subarray(i, i + CHUNK));
-  }
-  return Buffer.from(binary, "binary").toString("base64");
-}
 
 function guessMime(path, current) {
   let mime = current;
@@ -54,10 +46,9 @@ async function getFileBytes(fileId) {
   );
   if (!imgRes.ok) throw new Error(`خطا در دانلود تصویر: ${imgRes.status}`);
 
-  const arrayBuffer = await imgRes.arrayBuffer();
-  const bytes = new Uint8Array(arrayBuffer);
+  const buffer = await imgRes.buffer(); // node-fetch روش درست
   const mime = imgRes.headers.get("content-type")?.split(";")[0]?.trim() || "";
-  return { bytes, mime, path: filePath };
+  return { buffer, mime, path: filePath };
 }
 
 // ---------- Bale sendMessage ----------
@@ -181,9 +172,9 @@ ${conversationHistory ? "تاریخچه مکالمه:\n" + conversationHistory +
 
 // ---------- Gemini vision ----------
 async function analyzeImageWithGemini(fileId, prompt) {
-  const { bytes, mime: ct, path } = await getFileBytes(fileId);
+  const { buffer, mime: ct, path } = await getFileBytes(fileId);
   const mime = guessMime(path, ct);
-  const b64 = toBase64(bytes);
+  const b64 = buffer.toString("base64");
 
   console.log(`Image ready: ${bytes.length} bytes, mime: ${mime}`);
 
