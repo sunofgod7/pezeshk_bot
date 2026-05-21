@@ -95,7 +95,7 @@ ${conversationHistory ? 'تاریخچه مکالمه:\n' + conversationHistory +
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: systemPrompt }] }],
-        generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 10000 }
+        generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 1024 }
       })
     });
     
@@ -202,7 +202,7 @@ module.exports = async (req, res) => {
                   { inline_data: { mime_type: 'image/jpeg', data: base64Image } }
                 ]
               }],
-              generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 10000 }
+              generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 1024 }
             })
           });
           
@@ -287,7 +287,7 @@ module.exports = async (req, res) => {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 contents: [{ parts: [{ text: labPrompt }] }],
-                generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 10000 }
+                generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 1024 }
               })
             });
             
