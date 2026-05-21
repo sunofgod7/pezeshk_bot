@@ -142,7 +142,6 @@ module.exports = async (req, res) => {
           return res.status(200).json({ ok: true });
         }
         
-        // فقط یک پیام وضعیت ارسال می‌کنیم
         await sendMessage(chatId, '⏳ در حال پردازش و تحلیل تصویر...');
         
         try {
@@ -151,78 +150,81 @@ module.exports = async (req, res) => {
           
           console.log('Getting file info for:', fileId);
           
-          // دریافت اطلاعات فایل با timeout بیشتر
-          const fileResponse = await Promise.race([
-            fetch(`${BALE_API}/getFile?file_id=${fileId}`),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('زمان دریافت اطلاعات فایل به پایان رسید')), 15000))
-          ]);
+          // دریافت اطلاعات فایل بدون timeout
+          const fileResponse = await fetch(`${BALE_API}/getFile?file_id=${fileId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          
+          if (!fileResponse.ok) {
+            throw new Error(`خطا در دریافت اطلاعات فایل: ${fileResponse.status}`);
+          }
           
           const fileData = await fileResponse.json();
           console.log('File data:', JSON.stringify(fileData));
           
-          if (fileData.ok) {
-            const filePath = fileData.result.file_path;
-            const fileUrl = `https://tapi.bale.ai/file/bot${BALE_TOKEN}/${filePath}`;
-            
-            console.log('Downloading image from:', fileUrl);
-            
-            // دانلود تصویر با timeout بیشتر
-            const imageResponse = await Promise.race([
-              fetch(fileUrl),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('زمان دانلود تصویر به پایان رسید')), 20000))
-            ]);
-            
-            if (!imageResponse.ok) {
-              throw new Error(`خطا در دانلود تصویر: ${imageResponse.status}`);
-            }
-            
-            const arrayBuffer = await imageResponse.arrayBuffer();
-            const imageBuffer = Buffer.from(arrayBuffer);
-            const base64Image = imageBuffer.toString('base64');
-            
-            console.log('Image downloaded, size:', base64Image.length);
-            
-            const visionPrompt = session.labTestMode 
-              ? 'تو یک دکتر متخصص آزمایشگاه هستی. این تصویر نتایج آزمایش یک بیمار است. لطفا:\n- تمام پارامترهای آزمایش را استخراج کن\n- مقادیر غیرطبیعی را مشخص کن\n- تحلیل کامل و توضیحات ساده ارائه بده\n- توصیه‌های لازم را بده'
-              : 'تو یک دکتر متخصص هستی. این تصویر مربوط به یک بیمار است. لطفا تصویر را تحلیل کن و توضیحات پزشکی مفید ارائه بده.';
-            
-            const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-            
-            console.log('Sending to Gemini Vision API...');
-            const response = await Promise.race([
-              fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  contents: [{
-                    parts: [
-                      { text: visionPrompt },
-                      { inline_data: { mime_type: 'image/jpeg', data: base64Image } }
-                    ]
-                  }],
-                  generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 800 }
-                })
-              }),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('زمان تحلیل تصویر به پایان رسید')), 30000))
-            ]);
-            
-            const data = await response.json();
-            console.log('Gemini response:', JSON.stringify(data));
-            
-            if (data.candidates && data.candidates[0] && data.candidates[0].content) {
-              const analysis = data.candidates[0].content.parts[0].text;
-              await sendMessage(chatId, '🔬 تحلیل تصویر:\n\n' + analysis);
-              if (session.labTestMode) session.labTestMode = false;
-            } else {
-              await sendMessage(chatId, 'متاسفم، نتوانستم تصویر را تحلیل کنم. لطفا دوباره امتحان کنید.');
-            }
+          if (!fileData.ok || !fileData.result || !fileData.result.file_path) {
+            throw new Error('اطلاعات فایل معتبر نیست');
+          }
+          
+          const filePath = fileData.result.file_path;
+          const fileUrl = `https://tapi.bale.ai/file/bot${BALE_TOKEN}/${filePath}`;
+          
+          console.log('Downloading image from:', fileUrl);
+          
+          // دانلود تصویر
+          const imageResponse = await fetch(fileUrl);
+          
+          if (!imageResponse.ok) {
+            throw new Error(`خطا در دانلود تصویر: ${imageResponse.status}`);
+          }
+          
+          const arrayBuffer = await imageResponse.arrayBuffer();
+          const imageBuffer = Buffer.from(arrayBuffer);
+          const base64Image = imageBuffer.toString('base64');
+          
+          console.log('Image downloaded, size:', base64Image.length);
+          
+          const visionPrompt = session.labTestMode 
+            ? 'تو یک دکتر متخصص آزمایشگاه هستی. این تصویر نتایج آزمایش یک بیمار است. لطفا:\n- تمام پارامترهای آزمایش را استخراج کن\n- مقادیر غیرطبیعی را مشخص کن\n- تحلیل کامل و توضیحات ساده ارائه بده\n- توصیه‌های لازم را بده'
+            : 'تو یک دکتر متخصص هستی. این تصویر مربوط به یک بیمار است. لطفا تصویر را تحلیل کن و توضیحات پزشکی مفید ارائه بده.';
+          
+          const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+          
+          console.log('Sending to Gemini Vision API...');
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{
+                parts: [
+                  { text: visionPrompt },
+                  { inline_data: { mime_type: 'image/jpeg', data: base64Image } }
+                ]
+              }],
+              generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 800 }
+            })
+          });
+          
+          if (!response.ok) {
+            const errorData = await response.json();
+            console.error('Gemini API Error:', errorData);
+            throw new Error(`خطای Gemini: ${errorData.error?.message || response.status}`);
+          }
+          
+          const data = await response.json();
+          console.log('Gemini response received');
+          
+          if (data.candidates && data.candidates[0] && data.candidates[0].content) {
+            const analysis = data.candidates[0].content.parts[0].text;
+            await sendMessage(chatId, '🔬 تحلیل تصویر:\n\n' + analysis);
+            if (session.labTestMode) session.labTestMode = false;
           } else {
-            console.error('File data error:', fileData);
-            await sendMessage(chatId, 'خطا در دریافت تصویر از سرور بله. لطفا دوباره امتحان کنید.');
+            await sendMessage(chatId, 'متاسفم، نتوانستم تصویر را تحلیل کنم. لطفا دوباره امتحان کنید.');
           }
         } catch (error) {
           console.error('Photo processing error:', error);
-          await sendMessage(chatId, `❌ خطا: ${error.message}\n\nلطفا دوباره تلاش کنید یا تصویر کوچکتری ارسال کنید.`);
+          await sendMessage(chatId, `❌ خطا در پردازش تصویر: ${error.message}\n\nلطفا دوباره تلاش کنید.`);
         }
         
         return res.status(200).json({ ok: true });
