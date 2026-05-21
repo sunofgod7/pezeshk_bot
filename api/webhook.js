@@ -142,19 +142,19 @@ module.exports = async (req, res) => {
           return res.status(200).json({ ok: true });
         }
         
-        await sendMessage(chatId, '⏳ در حال پردازش تصویر...');
+        // فقط یک پیام وضعیت ارسال می‌کنیم
+        await sendMessage(chatId, '⏳ در حال پردازش و تحلیل تصویر...');
         
         try {
           const photo = update.message.photo[update.message.photo.length - 1];
           const fileId = photo.file_id;
           
           console.log('Getting file info for:', fileId);
-          await sendMessage(chatId, '📥 در حال دریافت تصویر...');
           
-          // دریافت اطلاعات فایل با timeout
+          // دریافت اطلاعات فایل با timeout بیشتر
           const fileResponse = await Promise.race([
             fetch(`${BALE_API}/getFile?file_id=${fileId}`),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout getting file info')), 10000))
+            new Promise((_, reject) => setTimeout(() => reject(new Error('زمان دریافت اطلاعات فایل به پایان رسید')), 15000))
           ]);
           
           const fileData = await fileResponse.json();
@@ -165,16 +165,15 @@ module.exports = async (req, res) => {
             const fileUrl = `https://tapi.bale.ai/file/bot${BALE_TOKEN}/${filePath}`;
             
             console.log('Downloading image from:', fileUrl);
-            await sendMessage(chatId, '🔄 در حال دانلود تصویر...');
             
-            // دانلود تصویر با timeout
+            // دانلود تصویر با timeout بیشتر
             const imageResponse = await Promise.race([
               fetch(fileUrl),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout downloading image')), 15000))
+              new Promise((_, reject) => setTimeout(() => reject(new Error('زمان دانلود تصویر به پایان رسید')), 20000))
             ]);
             
             if (!imageResponse.ok) {
-              throw new Error(`Failed to download image: ${imageResponse.status}`);
+              throw new Error(`خطا در دانلود تصویر: ${imageResponse.status}`);
             }
             
             const arrayBuffer = await imageResponse.arrayBuffer();
@@ -182,7 +181,6 @@ module.exports = async (req, res) => {
             const base64Image = imageBuffer.toString('base64');
             
             console.log('Image downloaded, size:', base64Image.length);
-            await sendMessage(chatId, '🤖 در حال تحلیل با هوش مصنوعی...');
             
             const visionPrompt = session.labTestMode 
               ? 'تو یک دکتر متخصص آزمایشگاه هستی. این تصویر نتایج آزمایش یک بیمار است. لطفا:\n- تمام پارامترهای آزمایش را استخراج کن\n- مقادیر غیرطبیعی را مشخص کن\n- تحلیل کامل و توضیحات ساده ارائه بده\n- توصیه‌های لازم را بده'
@@ -205,7 +203,7 @@ module.exports = async (req, res) => {
                   generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 800 }
                 })
               }),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout calling Gemini API')), 25000))
+              new Promise((_, reject) => setTimeout(() => reject(new Error('زمان تحلیل تصویر به پایان رسید')), 30000))
             ]);
             
             const data = await response.json();
@@ -220,11 +218,11 @@ module.exports = async (req, res) => {
             }
           } else {
             console.error('File data error:', fileData);
-            await sendMessage(chatId, 'خطا در دریافت تصویر. لطفا دوباره امتحان کنید.');
+            await sendMessage(chatId, 'خطا در دریافت تصویر از سرور بله. لطفا دوباره امتحان کنید.');
           }
         } catch (error) {
           console.error('Photo processing error:', error);
-          await sendMessage(chatId, `خطا در پردازش تصویر: ${error.message}`);
+          await sendMessage(chatId, `❌ خطا: ${error.message}\n\nلطفا دوباره تلاش کنید یا تصویر کوچکتری ارسال کنید.`);
         }
         
         return res.status(200).json({ ok: true });
