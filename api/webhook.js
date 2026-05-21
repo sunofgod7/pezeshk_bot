@@ -149,7 +149,14 @@ module.exports = async (req, res) => {
           const fileId = photo.file_id;
           
           console.log('Getting file info for:', fileId);
-          const fileResponse = await fetch(`${BALE_API}/getFile?file_id=${fileId}`);
+          await sendMessage(chatId, '📥 در حال دریافت تصویر...');
+          
+          // دریافت اطلاعات فایل با timeout
+          const fileResponse = await Promise.race([
+            fetch(`${BALE_API}/getFile?file_id=${fileId}`),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout getting file info')), 10000))
+          ]);
+          
           const fileData = await fileResponse.json();
           console.log('File data:', JSON.stringify(fileData));
           
@@ -158,30 +165,48 @@ module.exports = async (req, res) => {
             const fileUrl = `https://tapi.bale.ai/file/bot${BALE_TOKEN}/${filePath}`;
             
             console.log('Downloading image from:', fileUrl);
-            const imageResponse = await fetch(fileUrl);
-            const imageBuffer = await imageResponse.buffer();
+            await sendMessage(chatId, '🔄 در حال دانلود تصویر...');
+            
+            // دانلود تصویر با timeout
+            const imageResponse = await Promise.race([
+              fetch(fileUrl),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout downloading image')), 15000))
+            ]);
+            
+            if (!imageResponse.ok) {
+              throw new Error(`Failed to download image: ${imageResponse.status}`);
+            }
+            
+            const arrayBuffer = await imageResponse.arrayBuffer();
+            const imageBuffer = Buffer.from(arrayBuffer);
             const base64Image = imageBuffer.toString('base64');
             
             console.log('Image downloaded, size:', base64Image.length);
+            await sendMessage(chatId, '🤖 در حال تحلیل با هوش مصنوعی...');
             
             const visionPrompt = session.labTestMode 
               ? 'تو یک دکتر متخصص آزمایشگاه هستی. این تصویر نتایج آزمایش یک بیمار است. لطفا:\n- تمام پارامترهای آزمایش را استخراج کن\n- مقادیر غیرطبیعی را مشخص کن\n- تحلیل کامل و توضیحات ساده ارائه بده\n- توصیه‌های لازم را بده'
               : 'تو یک دکتر متخصص هستی. این تصویر مربوط به یک بیمار است. لطفا تصویر را تحلیل کن و توضیحات پزشکی مفید ارائه بده.';
             
             const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-            const response = await fetch(url, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                contents: [{
-                  parts: [
-                    { text: visionPrompt },
-                    { inline_data: { mime_type: 'image/jpeg', data: base64Image } }
-                  ]
-                }],
-                generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 800 }
-              })
-            });
+            
+            console.log('Sending to Gemini Vision API...');
+            const response = await Promise.race([
+              fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents: [{
+                    parts: [
+                      { text: visionPrompt },
+                      { inline_data: { mime_type: 'image/jpeg', data: base64Image } }
+                    ]
+                  }],
+                  generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 800 }
+                })
+              }),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout calling Gemini API')), 25000))
+            ]);
             
             const data = await response.json();
             console.log('Gemini response:', JSON.stringify(data));
