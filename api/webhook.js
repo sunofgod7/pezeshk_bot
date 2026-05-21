@@ -299,7 +299,10 @@ module.exports = async (req, res) => {
 
     // عکس
     if (update.message.photo) {
+      console.log("[Photo] Received photo message");
+      
       if (!session.visitStarted) {
+        console.log("[Photo] Visit not started, asking user to start");
         await sendMessage(
           chatId,
           'لطفا ابتدا "شروع ویزیت" یا "تحلیل آزمایش" را انتخاب کنید.',
@@ -309,6 +312,8 @@ module.exports = async (req, res) => {
 
       const caption = update.message.caption || "";
       const analyze = wantsAnalysis(caption);
+      
+      console.log(`[Photo] Caption: "${caption}", Analysis mode: ${analyze}, Lab mode: ${session.labTestMode}`);
 
       await sendMessage(
         chatId,
@@ -319,9 +324,12 @@ module.exports = async (req, res) => {
 
       try {
         const photo = update.message.photo[update.message.photo.length - 1];
+        console.log(`[Photo] Processing file_id: ${photo.file_id}`);
 
         if (analyze) {
+          console.log("[Photo] Starting lab test analysis...");
           const analysis = await analyzeLabTestImage(photo.file_id);
+          console.log(`[Photo] Analysis complete, length: ${analysis.length}`);
           await sendMessage(chatId, "🔬 تحلیل آزمایش:\n\n" + analysis);
           if (session.labTestMode) session.labTestMode = false;
         } else {
@@ -329,12 +337,14 @@ module.exports = async (req, res) => {
             ? "تو یک دکتر متخصص آزمایشگاه هستی. این تصویر نتایج آزمایش یک بیمار است. لطفا:\n- تمام پارامترهای آزمایش را استخراج کن\n- مقادیر غیرطبیعی را مشخص کن\n- تحلیل کامل و توضیحات ساده ارائه بده\n- توصیه‌های لازم را بده\n- در انتها هشدار بده که این تحلیل جایگزین نظر پزشک نیست."
             : "تو یک دکتر متخصص هستی. این تصویر مربوط به یک بیمار است. لطفا تصویر را تحلیل کن و توضیحات پزشکی مفید ارائه بده.";
 
+          console.log("[Photo] Starting general image analysis...");
           const analysis = await analyzeImageWithGemini(photo.file_id, prompt);
+          console.log(`[Photo] Analysis complete, length: ${analysis.length}`);
           await sendMessage(chatId, "🔬 تحلیل تصویر:\n\n" + analysis);
           if (session.labTestMode) session.labTestMode = false;
         }
       } catch (error) {
-        console.error("Photo error:", error.message);
+        console.error("[Photo] Error:", error.message, error.stack);
         await sendMessage(chatId, `❌ خطا در پردازش تصویر: ${error.message}`);
       }
 
@@ -407,27 +417,46 @@ module.exports = async (req, res) => {
         );
       } else if (session.labTestMode) {
         try {
-          const data = await gateway({
-            model: "google/gemini-2.5-flash",
-            messages: [
-              {
-                role: "system",
-                content:
-                  "تو یک دکتر متخصص آزمایشگاه هستی. نتایج آزمایش را تحلیل کن، مقادیر غیرطبیعی را مشخص کن، توضیح ساده بده و توصیه‌های لازم را ارائه کن.",
+          const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [
+                    {
+                      text: `تو یک دکتر متخصص آزمایشگاه هستی. نتایج آزمایش را تحلیل کن، مقادیر غیرطبیعی را مشخص کن، توضیح ساده بده و توصیه‌های لازم را ارائه کن.\n\nنتایج: ${userMessage}`,
+                    },
+                  ],
+                },
+              ],
+              generationConfig: {
+                temperature: 0.7,
+                topK: 40,
+                topP: 0.95,
+                maxOutputTokens: 8000,
               },
-              { role: "user", content: `نتایج: ${userMessage}` },
-            ],
+            }),
           });
-          if (data.choices?.[0]?.message?.content) {
+          const data = await response.json();
+          if (!response.ok) {
+            console.error("Lab test text error:", JSON.stringify(data));
             await sendMessage(
               chatId,
-              "🔬 تحلیل آزمایش:\n\n" + data.choices[0].message.content.trim(),
+              `خطا: ${data.error?.message || "مشکل در تحلیل"}`,
+            );
+          } else if (data.candidates?.[0]?.content) {
+            await sendMessage(
+              chatId,
+              "🔬 تحلیل آزمایش:\n\n" +
+                data.candidates[0].content.parts[0].text,
             );
             session.labTestMode = false;
           } else {
             await sendMessage(chatId, "متاسفم، نتوانستم آزمایش را تحلیل کنم");
           }
         } catch (e) {
+          console.error("Lab test text exception:", e);
           await sendMessage(chatId, `خطا: ${e.message}`);
         }
       } else {
