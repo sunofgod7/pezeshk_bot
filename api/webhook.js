@@ -222,13 +222,16 @@ async function analyzeImageWithGemini(fileId, prompt) {
 
 // ---------- Lab test analysis ----------
 async function analyzeLabTestImage(fileId) {
-  const { bytes, mime: ct, path } = await getFileBytes(fileId);
-  const mime = guessMime(path, ct);
-  const b64 = toBase64(bytes);
+  try {
+    console.log("[analyzeLabTestImage] Starting...");
+    const { bytes, mime: ct, path } = await getFileBytes(fileId);
+    console.log(`[analyzeLabTestImage] File downloaded: ${bytes.length} bytes`);
+    
+    const mime = guessMime(path, ct);
+    const b64 = toBase64(bytes);
+    console.log(`[analyzeLabTestImage] Base64 encoded, mime: ${mime}`);
 
-  console.log(`Lab test image ready: ${bytes.length} bytes, mime: ${mime}`);
-
-  const prompt = `تو یک دستیار پزشکی هستی که نتایج آزمایش‌های پزشکی (خون، ادرار، بیوشیمی، هورمونی و …) را به زبان فارسی روان تحلیل می‌کنی.
+    const prompt = `تو یک دستیار پزشکی هستی که نتایج آزمایش‌های پزشکی (خون، ادرار، بیوشیمی، هورمونی و …) را به زبان فارسی روان تحلیل می‌کنی.
 
 از روی تصویرِ برگه‌ی آزمایش:
 ۱) نام آزمایش/پروفایل را بنویس.
@@ -241,37 +244,48 @@ async function analyzeLabTestImage(fileId) {
 اگر تصویر برگه‌ی آزمایش نیست یا کیفیتش پایین است، صادقانه بگو و راهنمایی کن دوباره با کیفیت بهتر بفرستد.
 فقط فارسی بنویس و از Markdown ساده استفاده کن.`;
 
-  const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [
-        {
-          parts: [
-            { text: prompt },
-            { inline_data: { mime_type: mime, data: b64 } },
-          ],
+    console.log("[analyzeLabTestImage] Calling Gemini API...");
+    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: prompt },
+              { inline_data: { mime_type: mime, data: b64 } },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.4,
+          topK: 40,
+          topP: 0.95,
+          maxOutputTokens: 8000,
         },
-      ],
-      generationConfig: {
-        temperature: 0.4,
-        topK: 40,
-        topP: 0.95,
-        maxOutputTokens: 8000,
-      },
-    }),
-  });
+      }),
+    });
 
-  const data = await response.json();
-  if (!response.ok) {
-    console.error("Lab test analysis error:", JSON.stringify(data));
-    throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
-  }
+    console.log(`[analyzeLabTestImage] Gemini response status: ${response.status}`);
+    const data = await response.json();
+    
+    if (!response.ok) {
+      console.error("[analyzeLabTestImage] Gemini error:", JSON.stringify(data));
+      throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
+    }
 
-  if (data.candidates?.[0]?.content) {
-    return data.candidates[0].content.parts[0].text;
+    if (data.candidates?.[0]?.content) {
+      const result = data.candidates[0].content.parts[0].text;
+      console.log(`[analyzeLabTestImage] Success, result length: ${result.length}`);
+      return result;
+    }
+    
+    console.error("[analyzeLabTestImage] No content in response:", JSON.stringify(data));
+    throw new Error("پاسخی از Gemini دریافت نشد");
+  } catch (error) {
+    console.error("[analyzeLabTestImage] Exception:", error.message, error.stack);
+    throw error;
   }
-  throw new Error("پاسخی از Gemini دریافت نشد");
 }
 
 function wantsAnalysis(caption) {
