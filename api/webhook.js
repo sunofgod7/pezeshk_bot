@@ -298,7 +298,7 @@ module.exports = async (req, res) => {
               await sendMessage(chatId, '🔬 تحلیل آزمایش:\n\n' + labAnalysis);
               session.labTestMode = false;
             } else {
-              await sendMessage(chatId, 'متاسفم، نتوانستم آزمایش را تحلیل کنم.');
+              await sendMessage(chatId, 'متاسفم، نتوانستم آزمایش را تحلیل کنم');
             }
           } else {
             const geminiResponse = await getGeminiResponse(chatId, userMessage);
