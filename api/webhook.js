@@ -4,23 +4,16 @@ const BALE_TOKEN = process.env.BALE_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const BALE_API = `https://tapi.bale.ai/bot${BALE_TOKEN}`;
 
-// حافظه موقت برای نگهداری تاریخچه مکالمات (در production باید از دیتابیس استفاده کنید)
+// حافظه موقت برای نگهداری تاریخچه مکالمات
 const userSessions = new Map();
 
 async function sendMessage(chatId, text, replyMarkup = null) {
-  const MAX_LENGTH = 3500; // محدودیت ایمن برای بله
+  const MAX_LENGTH = 3500;
   
-  // اگر پیام کوتاه است، مستقیم ارسال کن
   if (text.length <= MAX_LENGTH) {
     const url = `${BALE_API}/sendMessage`;
-    const body = {
-      chat_id: chatId,
-      text: text
-    };
-    
-    if (replyMarkup) {
-      body.reply_markup = replyMarkup;
-    }
+    const body = { chat_id: chatId, text: text };
+    if (replyMarkup) body.reply_markup = replyMarkup;
     
     const response = await fetch(url, {
       method: 'POST',
@@ -30,7 +23,7 @@ async function sendMessage(chatId, text, replyMarkup = null) {
     return response.json();
   }
   
-  // تقسیم پیام به چند قسمت بر اساس خط جدید و جملات
+  // تقسیم پیام بلند
   const parts = [];
   const paragraphs = text.split('\n\n');
   let currentPart = '';
@@ -39,49 +32,17 @@ async function sendMessage(chatId, text, replyMarkup = null) {
     if ((currentPart + '\n\n' + paragraph).length <= MAX_LENGTH) {
       currentPart += (currentPart ? '\n\n' : '') + paragraph;
     } else {
-      if (currentPart) {
-        parts.push(currentPart.trim());
-      }
-      
-      // اگر پاراگراف خودش خیلی بلند است
-      if (paragraph.length > MAX_LENGTH) {
-        const sentences = paragraph.match(/[^.!?؟]+[.!?؟]+/g) || [paragraph];
-        let sentencePart = '';
-        
-        for (const sentence of sentences) {
-          if ((sentencePart + sentence).length <= MAX_LENGTH) {
-            sentencePart += sentence;
-          } else {
-            if (sentencePart) {
-              parts.push(sentencePart.trim());
-            }
-            sentencePart = sentence;
-          }
-        }
-        
-        currentPart = sentencePart;
-      } else {
-        currentPart = paragraph;
-      }
+      if (currentPart) parts.push(currentPart.trim());
+      currentPart = paragraph.length > MAX_LENGTH ? paragraph.substring(0, MAX_LENGTH) : paragraph;
     }
   }
   
-  if (currentPart) {
-    parts.push(currentPart.trim());
-  }
+  if (currentPart) parts.push(currentPart.trim());
   
-  // ارسال تمام قسمت‌ها
   for (let i = 0; i < parts.length; i++) {
     const url = `${BALE_API}/sendMessage`;
-    const body = {
-      chat_id: chatId,
-      text: parts[i]
-    };
-    
-    // فقط در آخرین پیام keyboard رو اضافه کن
-    if (replyMarkup && i === parts.length - 1) {
-      body.reply_markup = replyMarkup;
-    }
+    const body = { chat_id: chatId, text: parts[i] };
+    if (replyMarkup && i === parts.length - 1) body.reply_markup = replyMarkup;
     
     await fetch(url, {
       method: 'POST',
@@ -89,10 +50,7 @@ async function sendMessage(chatId, text, replyMarkup = null) {
       body: JSON.stringify(body)
     });
     
-    // تاخیر کوچک بین پیام‌ها
-    if (i < parts.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 800));
-    }
+    if (i < parts.length - 1) await new Promise(resolve => setTimeout(resolve, 800));
   }
   
   return { ok: true };
@@ -100,10 +58,7 @@ async function sendMessage(chatId, text, replyMarkup = null) {
 
 function getSession(chatId) {
   if (!userSessions.has(chatId)) {
-    userSessions.set(chatId, {
-      history: [],
-      visitStarted: false
-    });
+    userSessions.set(chatId, { history: [], visitStarted: false, labTestMode: false });
   }
   return userSessions.get(chatId);
 }
@@ -115,8 +70,6 @@ function clearSession(chatId) {
 async function getGeminiResponse(chatId, userMessage) {
   try {
     const session = getSession(chatId);
-    
-    // ساخت تاریخچه مکالمه برای Gemini
     const conversationHistory = session.history.map(msg => 
       `${msg.role === 'user' ? 'بیمار' : 'دکتر'}: ${msg.content}`
     ).join('\n');
@@ -126,32 +79,23 @@ async function getGeminiResponse(chatId, userMessage) {
 رفتار تو باید این‌گونه باشه:
 - با احترام و دلسوزی با بیماران صحبت کن (بدون تعارفات زیاد)
 - پاسخ‌هایت را کوتاه و مفید نگه دار (حداکثر 3-4 جمله)
-- سوالات دقیق و هدفمند برای تشخیص بهتر بپرس (سن، جنسیت، مدت زمان علائم، شدت درد، سابقه بیماری و...)
+- سوالات دقیق و هدفمند برای تشخیص بهتر بپرس
 - علائم را به دقت بررسی کن
-- حداقل 3-4 سوال مهم بپرس قبل از اینکه تشخیص نهایی بدی
-- توصیه‌های پزشکی مفید و کاربردی بده
-- در صورت لزوم، مراجعه به پزشک متخصص یا اورژانس را توصیه کن
-- از زبان ساده و قابل فهم استفاده کن
+- حداقل 3-4 سوال مهم بپرس قبل از تشخیص نهایی
+- توصیه‌های پزشکی مفید بده
+- در صورت لزوم، مراجعه به پزشک متخصص را توصیه کن
+- از زبان ساده استفاده کن
 - همیشه هشدار بده که تشخیص نهایی نیاز به معاینه حضوری دارد
 
 ${conversationHistory ? 'تاریخچه مکالمه:\n' + conversationHistory + '\n\n' : ''}پیام جدید بیمار: ${userMessage}`;
 
-    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-3.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{
-          parts: [{
-            text: systemPrompt
-          }]
-        }],
-        generationConfig: {
-          temperature: 0.7,
-          topK: 40,
-          topP: 0.95,
-          maxOutputTokens: 20000
-        }
+        contents: [{ parts: [{ text: systemPrompt }] }],
+        generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 500 }
       })
     });
     
@@ -164,20 +108,13 @@ ${conversationHistory ? 'تاریخچه مکالمه:\n' + conversationHistory +
     
     if (data.candidates && data.candidates[0] && data.candidates[0].content) {
       const aiResponse = data.candidates[0].content.parts[0].text;
-      
-      // ذخیره در تاریخچه
       session.history.push({ role: 'user', content: userMessage });
       session.history.push({ role: 'assistant', content: aiResponse });
-      
-      // محدود کردن تاریخچه به 20 پیام آخر
-      if (session.history.length > 20) {
-        session.history = session.history.slice(-20);
-      }
-      
+      if (session.history.length > 20) session.history = session.history.slice(-20);
       return aiResponse;
     }
     
-    return 'متاسفم، در حال حاضر نمی‌توانم به سوال شما پاسخ دهم. لطفا دوباره تلاش کنید.';
+    return 'متاسفم، در حال حاضر نمی‌توانم به سوال شما پاسخ دهم.';
   } catch (error) {
     console.error('Gemini API Error:', error.message);
     return `خطا: ${error.message}`;
@@ -192,46 +129,93 @@ module.exports = async (req, res) => {
   try {
     const update = req.body;
 
-    if (update.message && update.message.text) {
+    if (update.message) {
       const chatId = update.message.chat.id;
-      const userMessage = update.message.text;
       const session = getSession(chatId);
+      
+      // دریافت عکس
+      if (update.message.photo) {
+        if (!session.visitStarted) {
+          await sendMessage(chatId, 'لطفا ابتدا "شروع ویزیت" یا "تحلیل آزمایش" را انتخاب کنید.');
+          return res.status(200).json({ ok: true });
+        }
+        
+        const photo = update.message.photo[update.message.photo.length - 1];
+        const fileId = photo.file_id;
+        
+        const fileResponse = await fetch(`${BALE_API}/getFile?file_id=${fileId}`);
+        const fileData = await fileResponse.json();
+        
+        if (fileData.ok) {
+          const filePath = fileData.result.file_path;
+          const fileUrl = `https://tapi.bale.ai/file/bot${BALE_TOKEN}/${filePath}`;
+          
+          const imageResponse = await fetch(fileUrl);
+          const imageBuffer = await imageResponse.buffer();
+          const base64Image = imageBuffer.toString('base64');
+          
+          const visionPrompt = session.labTestMode 
+            ? 'تو یک دکتر متخصص آزمایشگاه هستی. این تصویر نتایج آزمایش یک بیمار است. لطفا:\n- تمام پارامترهای آزمایش را استخراج کن\n- مقادیر غیرطبیعی را مشخص کن\n- تحلیل کامل و توضیحات ساده ارائه بده\n- توصیه‌های لازم را بده'
+            : 'تو یک دکتر متخصص هستی. این تصویر مربوط به یک بیمار است. لطفا تصویر را تحلیل کن و توضیحات پزشکی مفید ارائه بده.';
+          
+          const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{
+                parts: [
+                  { text: visionPrompt },
+                  { inline_data: { mime_type: 'image/jpeg', data: base64Image } }
+                ]
+              }],
+              generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 800 }
+            })
+          });
+          
+          const data = await response.json();
+          
+          if (data.candidates && data.candidates[0] && data.candidates[0].content) {
+            const analysis = data.candidates[0].content.parts[0].text;
+            await sendMessage(chatId, '🔬 تحلیل تصویر:\n\n' + analysis);
+            if (session.labTestMode) session.labTestMode = false;
+          } else {
+            await sendMessage(chatId, 'متاسفم، نتوانستم تصویر را تحلیل کنم. لطفا دوباره امتحان کنید.');
+          }
+        } else {
+          await sendMessage(chatId, 'خطا در دریافت تصویر. لطفا دوباره امتحان کنید.');
+        }
+        
+        return res.status(200).json({ ok: true });
+      }
+      
+      if (!update.message.text) {
+        return res.status(200).json({ ok: true });
+      }
+      
+      const userMessage = update.message.text;
 
-      // دستورات خاص
+      // دستورات
       if (userMessage === '/start' || userMessage.toLowerCase() === 'شروع ویزیت' || userMessage.toLowerCase() === 'استارت ویزیت') {
         clearSession(chatId);
         const newSession = getSession(chatId);
         newSession.visitStarted = true;
         
         const keyboard = {
-          keyboard: [
-            [{ text: 'تحلیل آزمایش' }],
-            [{ text: 'پایان ویزیت' }, { text: 'شروع ویزیت جدید' }]
-          ],
+          keyboard: [[{ text: 'تحلیل آزمایش' }], [{ text: 'پایان ویزیت' }, { text: 'شروع ویزیت جدید' }]],
           resize_keyboard: true
         };
         
-        await sendMessage(
-          chatId, 
-          '👨‍⚕️ سلام، من دکتر هوش مصنوعی شما هستم.\n\nلطفا مشکل یا علائم خود را به طور کامل توضیح دهید. من چند سوال از شما خواهم پرسید تا بتوانم بهترین راهنمایی را به شما ارائه دهم.\n\n🔬 همچنین می‌توانید نتایج آزمایش خود را برای تحلیل ارسال کنید.\n\n⚠️ توجه: این مشاوره جایگزین ویزیت حضوری نزد پزشک نیست.',
-          keyboard
-        );
+        await sendMessage(chatId, '👨‍⚕️ سلام، من دکتر هوش مصنوعی شما هستم.\n\nلطفا مشکل یا علائم خود را توضیح دهید.\n\n🔬 می‌توانید نتایج آزمایش (عکس یا متن) را برای تحلیل ارسال کنید.\n\n⚠️ توجه: این مشاوره جایگزین ویزیت حضوری نیست.', keyboard);
         
       } else if (userMessage.toLowerCase() === 'تحلیل آزمایش') {
         session.visitStarted = true;
         session.labTestMode = true;
-        
-        await sendMessage(
-          chatId,
-          '🔬 لطفا نتایج آزمایش خود را ارسال کنید.\n\nمی‌توانید:\n• عکس آزمایش را ارسال کنید\n• یا نتایج را تایپ کنید\n\nمثال:\n"CBC: WBC=8000, RBC=4.5, HGB=13.5"\n"قند ناشتا: 110"\n"کراتینین: 1.2"'
-        );
+        await sendMessage(chatId, '🔬 لطفا نتایج آزمایش خود را ارسال کنید.\n\nمی‌توانید:\n• عکس آزمایش را ارسال کنید\n• یا نتایج را تایپ کنید');
         
       } else if (userMessage.toLowerCase() === 'پایان ویزیت') {
         clearSession(chatId);
-        await sendMessage(
-          chatId,
-          '✅ ویزیت به پایان رسید.\n\nامیدوارم که به زودی حالتان بهتر شود. در صورت نیاز به مشاوره مجدد، روی "شروع ویزیت جدید" کلیک کنید.\n\n🏥 در صورت تشدید علائم، حتما به پزشک مراجعه کنید.'
-        );
+        await sendMessage(chatId, '✅ ویزیت به پایان رسید.\n\nامیدوارم حالتان بهتر شود. 🏥 در صورت تشدید علائم، به پزشک مراجعه کنید.');
         
       } else if (userMessage.toLowerCase() === 'شروع ویزیت جدید') {
         clearSession(chatId);
@@ -239,66 +223,30 @@ module.exports = async (req, res) => {
         newSession.visitStarted = true;
         
         const keyboard = {
-          keyboard: [
-            [{ text: 'تحلیل آزمایش' }],
-            [{ text: 'پایان ویزیت' }, { text: 'شروع ویزیت جدید' }]
-          ],
+          keyboard: [[{ text: 'تحلیل آزمایش' }], [{ text: 'پایان ویزیت' }, { text: 'شروع ویزیت جدید' }]],
           resize_keyboard: true
         };
         
-        await sendMessage(
-          chatId,
-          '👨‍⚕️ ویزیت جدید شروع شد.\n\nلطفا مشکل یا علائم خود را توضیح دهید.',
-          keyboard
-        );
+        await sendMessage(chatId, '👨‍⚕️ ویزیت جدید شروع شد.\n\nلطفا مشکل یا علائم خود را توضیح دهید.', keyboard);
         
       } else {
-        // بررسی اینکه آیا ویزیت شروع شده یا نه
         if (!session.visitStarted) {
           const keyboard = {
-            keyboard: [
-              [{ text: 'شروع ویزیت' }, { text: 'تحلیل آزمایش' }]
-            ],
+            keyboard: [[{ text: 'شروع ویزیت' }, { text: 'تحلیل آزمایش' }]],
             resize_keyboard: true
           };
-          
-          await sendMessage(
-            chatId,
-            '👋 سلام! برای شروع مشاوره پزشکی، لطفا یکی از گزینه‌ها را انتخاب کنید:\n\n• شروع ویزیت: برای مشاوره پزشکی\n• تحلیل آزمایش: برای تحلیل نتایج آزمایش',
-            keyboard
-          );
+          await sendMessage(chatId, '👋 سلام! لطفا یکی از گزینه‌ها را انتخاب کنید:\n\n• شروع ویزیت: مشاوره پزشکی\n• تحلیل آزمایش: تحلیل نتایج آزمایش', keyboard);
         } else {
-          // بررسی حالت تحلیل آزمایش
           if (session.labTestMode) {
-            const labPrompt = `تو یک دکتر متخصص آزمایشگاه و پاتولوژیست هستی. وظیفه‌ات تحلیل نتایج آزمایش بیماران است.
-
-رفتار تو باید این‌گونه باشه:
-- نتایج آزمایش را به دقت بررسی کن
-- مقادیر غیرطبیعی را مشخص کن
-- توضیح ساده و قابل فهم از هر پارامتر بده
-- احتمالات تشخیصی را بر اساس نتایج ذکر کن
-- در صورت نیاز، آزمایش‌های تکمیلی پیشنهاد بده
-- توصیه کن که حتما با پزشک معالج مشورت کنند
-- پاسخ‌هایت را کوتاه و مفید نگه دار
-
-نتایج آزمایش بیمار: ${userMessage}`;
+            const labPrompt = `تو یک دکتر متخصص آزمایشگاه هستی. نتایج آزمایش را تحلیل کن، مقادیر غیرطبیعی را مشخص کن، توضیح ساده بده و توصیه‌های لازم را ارائه کن.\n\nنتایج: ${userMessage}`;
 
             const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
             const response = await fetch(url, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                contents: [{
-                  parts: [{
-                    text: labPrompt
-                  }]
-                }],
-                generationConfig: {
-                  temperature: 0.7,
-                  topK: 40,
-                  topP: 0.95,
-                  maxOutputTokens: 600
-                }
+                contents: [{ parts: [{ text: labPrompt }] }],
+                generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 600 }
               })
             });
             
@@ -307,14 +255,11 @@ module.exports = async (req, res) => {
             if (data.candidates && data.candidates[0] && data.candidates[0].content) {
               const labAnalysis = data.candidates[0].content.parts[0].text;
               await sendMessage(chatId, '🔬 تحلیل آزمایش:\n\n' + labAnalysis);
-              
-              // خروج از حالت آزمایش
               session.labTestMode = false;
             } else {
-              await sendMessage(chatId, 'متاسفم، نتوانستم آزمایش را تحلیل کنم. لطفا دوباره امتحان کنید.');
+              await sendMessage(chatId, 'متاسفم، نتوانستم آزمایش را تحلیل کنم.');
             }
           } else {
-            // پاسخ به سوال بیمار
             const geminiResponse = await getGeminiResponse(chatId, userMessage);
             await sendMessage(chatId, geminiResponse);
           }
