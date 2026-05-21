@@ -232,7 +232,7 @@ module.exports = async (req, res) => {
         return res.status(200).json({ ok: true });
       }
 
-      await sendMessage(chatId, "⏳ در حال پردازش و تحلیل تصویر...");
+      await sendMessage(chatId, "⏳ شروع پردازش و تحلیل تصویر...");
 
       try {
         const photo = update.message.photo[update.message.photo.length - 1];
