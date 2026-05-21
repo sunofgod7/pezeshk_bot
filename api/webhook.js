@@ -183,7 +183,7 @@ ${conversationHistory ? "تاریخچه مکالمه:\n" + conversationHistory +
           temperature: 0.7,
           topK: 40,
           topP: 0.95,
-          maxOutputTokens: 100000,
+          maxOutputTokens: 10000,
         },
       }),
     });
@@ -234,7 +234,7 @@ async function analyzeImageWithGemini(fileId, prompt) {
         temperature: 0.7,
         topK: 40,
         topP: 0.95,
-        maxOutputTokens: 100000,
+        maxOutputTokens: 10000,
       },
     }),
   });
@@ -292,7 +292,7 @@ async function analyzeLabTestImage(fileId) {
           temperature: 0.5,
           topK: 32,
           topP: 0.9,
-          maxOutputTokens: 100000,
+          maxOutputTokens: 10000,
         },
       }),
     });
@@ -479,7 +479,7 @@ module.exports = async (req, res) => {
                 temperature: 0.7,
                 topK: 32,
                 topP: 0.9,
-                maxOutputTokens: 100000,
+                maxOutputTokens: 10000,
               },
             }),
           });
