@@ -142,6 +142,7 @@ function getSession(chatId) {
       history: [],
       visitStarted: false,
       labTestMode: false,
+      medicineMode: false,
     });
   }
   return userSessions.get(chatId);
@@ -251,6 +252,140 @@ async function analyzeImageWithGemini(fileId, prompt) {
   throw new Error("پاسخی از Gemini دریافت نشد");
 }
 
+// ---------- Medicine analysis ----------
+async function analyzeMedicineImage(fileId) {
+  try {
+    console.log("[analyzeMedicineImage] Starting...");
+    const { bytes, mime: ct, path } = await getFileBytes(fileId);
+    console.log(`[analyzeMedicineImage] File downloaded: ${bytes.length} bytes`);
+    
+    const mime = guessMime(path, ct);
+    const b64 = toBase64(bytes);
+    console.log(`[analyzeMedicineImage] Base64 encoded, mime: ${mime}`);
+
+    const prompt = `تو یک داروساز و متخصص داروشناسی هستی که اطلاعات کامل درباره داروها به زبان فارسی ارائه می‌دهی.
+
+از روی تصویر داروها:
+۱) نام هر دارو را شناسایی کن (نام تجاری و نام ژنریک).
+۲) برای هر دارو یک بخش جداگانه بساز شامل:
+   • 💊 نام دارو
+   • 🎯 کاربرد: این دارو برای چه بیماری‌ها یا علائمی استفاده می‌شود
+   • 📊 دوز مصرف: دوز معمول برای بزرگسالان (و در صورت لزوم کودکان)
+   • ⚠️ عوارض جانبی: عوارض شایع و مهم
+   • 🔄 تداخلات دارویی: داروهایی که نباید همزمان مصرف شوند
+   • ⏰ زمان مصرف: قبل/بعد غذا، صبح/شب و...
+   • ⚡ نکات مهم: هشدارها و توصیه‌های ویژه
+
+۳) اگر چند دارو با هم هستند، بررسی کن که آیا تداخل دارویی خطرناکی دارند یا نه.
+۴) در انتها این هشدار را بیاور: «⚠️ این اطلاعات جنبه‌ی آموزشی دارد. حتماً با پزشک یا داروساز خود مشورت کنید و خودسرانه دارو مصرف نکنید.»
+
+اگر تصویر واضح نیست یا دارو قابل شناسایی نیست، صادقانه بگو و راهنمایی کن.
+فقط فارسی بنویس و از Markdown و ایموجی استفاده کن.`;
+
+    console.log("[analyzeMedicineImage] Calling Gemini API...");
+    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: prompt },
+              { inline_data: { mime_type: mime, data: b64 } },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.5,
+          topK: 32,
+          topP: 0.9,
+          maxOutputTokens: 5000,
+        },
+      }),
+    });
+
+    console.log(`[analyzeMedicineImage] Gemini response status: ${response.status}`);
+    const data = await response.json();
+    
+    if (!response.ok) {
+      console.error("[analyzeMedicineImage] Gemini error:", JSON.stringify(data));
+      throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
+    }
+
+    if (data.candidates?.[0]?.content) {
+      const result = data.candidates[0].content.parts[0].text;
+      console.log(`[analyzeMedicineImage] Success, result length: ${result.length}`);
+      return result;
+    }
+    
+    console.error("[analyzeMedicineImage] No content in response:", JSON.stringify(data));
+    throw new Error("پاسخی از Gemini دریافت نشد");
+  } catch (error) {
+    console.error("[analyzeMedicineImage] Exception:", error.message, error.stack);
+    throw error;
+  }
+}
+
+async function analyzeMedicineText(medicineText) {
+  try {
+    console.log("[analyzeMedicineText] Starting...");
+    
+    const prompt = `تو یک داروساز و متخصص داروشناسی هستی که اطلاعات کامل درباره داروها به زبان فارسی ارائه می‌دهی.
+
+داروهای ذکر شده: ${medicineText}
+
+برای هر دارو یک بخش جداگانه بساز شامل:
+• 💊 نام دارو (تجاری و ژنریک)
+• 🎯 کاربرد: این دارو برای چه بیماری‌ها یا علائمی استفاده می‌شود
+• 📊 دوز مصرف: دوز معمول برای بزرگسالان (و در صورت لزوم کودکان)
+• ⚠️ عوارض جانبی: عوارض شایع و مهم
+• 🔄 تداخلات دارویی: داروهایی که نباید همزمان مصرف شوند
+• ⏰ زمان مصرف: قبل/بعد غذا، صبح/شب و...
+• ⚡ نکات مهم: هشدارها و توصیه‌های ویژه
+
+اگر چند دارو ذکر شده، بررسی کن که آیا تداخل دارویی خطرناکی دارند یا نه.
+
+در انتها این هشدار را بیاور: «⚠️ این اطلاعات جنبه‌ی آموزشی دارد. حتماً با پزشک یا داروساز خود مشورت کنید و خودسرانه دارو مصرف نکنید.»
+
+فقط فارسی بنویس و از Markdown و ایموجی استفاده کن.`;
+
+    console.log("[analyzeMedicineText] Calling Gemini API...");
+    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.5,
+          topK: 32,
+          topP: 0.9,
+          maxOutputTokens: 5000,
+        },
+      }),
+    });
+
+    console.log(`[analyzeMedicineText] Gemini response status: ${response.status}`);
+    const data = await response.json();
+    
+    if (!response.ok) {
+      console.error("[analyzeMedicineText] Gemini error:", JSON.stringify(data));
+      throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
+    }
+
+    if (data.candidates?.[0]?.content) {
+      const result = data.candidates[0].content.parts[0].text;
+      console.log(`[analyzeMedicineText] Success, result length: ${result.length}`);
+      return result;
+    }
+    
+    console.error("[analyzeMedicineText] No content in response:", JSON.stringify(data));
+    throw new Error("پاسخی از Gemini دریافت نشد");
+  } catch (error) {
+    console.error("[analyzeMedicineText] Exception:", error.message, error.stack);
+    throw error;
+  }
+}
+
 // ---------- Lab test analysis ----------
 async function analyzeLabTestImage(fileId) {
   try {
@@ -331,6 +466,19 @@ function wantsAnalysis(caption) {
   );
 }
 
+function wantsMedicineAnalysis(caption) {
+  if (!caption) return false;
+  const c = caption.toLowerCase();
+  return (
+    c.includes("/medicine") ||
+    c.includes("/drug") ||
+    caption.includes("دارو") ||
+    caption.includes("قرص") ||
+    caption.includes("داروی") ||
+    caption.includes("داروها")
+  );
+}
+
 // ---------- Webhook ----------
 module.exports = async (req, res) => {
   if (req.method !== "POST") return res.status(200).json({ ok: true });
@@ -350,47 +498,69 @@ module.exports = async (req, res) => {
         console.log("[Photo] Visit not started, asking user to start");
         await sendMessage(
           chatId,
-          'لطفا ابتدا "شروع ویزیت" یا "تحلیل آزمایش" را انتخاب کنید.',
+          'لطفا ابتدا "شروع ویزیت"، "تحلیل آزمایش" یا "تحلیل دارو" را انتخاب کنید.',
         );
         return res.status(200).json({ ok: true });
       }
 
       const caption = update.message.caption || "";
-      const analyze = wantsAnalysis(caption);
+      const analyzeTest = wantsAnalysis(caption);
+      const analyzeMedicine = wantsMedicineAnalysis(caption);
       
-      console.log(`[Photo] Caption: "${caption}", Analysis mode: ${analyze}, Lab mode: ${session.labTestMode}`);
+      console.log(`[Photo] Caption: "${caption}", Test mode: ${analyzeTest}, Medicine mode: ${analyzeMedicine}, Lab mode: ${session.labTestMode}, Medicine session: ${session.medicineMode}`);
 
-      await sendMessage(
-        chatId,
-        analyze
-          ? "در حال تحلیل برگه‌ی آزمایش… 🧪⏳ (ممکنه چند ثانیه طول بکشه)"
-          : "⏳ در حال پردازش و تحلیل تصویر...",
-      );
+      // تشخیص خودکار بر اساس حالت فعلی
+      if (session.medicineMode || analyzeMedicine) {
+        await sendMessage(
+          chatId,
+          "در حال تحلیل داروها… 💊⏳ (ممکنه چند ثانیه طول بکشه)",
+        );
 
-      try {
-        const photo = update.message.photo[update.message.photo.length - 1];
-        console.log(`[Photo] Processing file_id: ${photo.file_id}`);
+        try {
+          const photo = update.message.photo[update.message.photo.length - 1];
+          console.log(`[Photo] Processing medicine image, file_id: ${photo.file_id}`);
+          
+          const analysis = await analyzeMedicineImage(photo.file_id);
+          console.log(`[Photo] Medicine analysis complete, length: ${analysis.length}`);
+          await sendMessage(chatId, "💊 تحلیل داروها:\n\n" + analysis);
+          if (session.medicineMode) session.medicineMode = false;
+        } catch (error) {
+          console.error("[Photo] Medicine error:", error.message, error.stack);
+          await sendMessage(chatId, `❌ خطا در تحلیل دارو: ${error.message}`);
+        }
+      } else if (session.labTestMode || analyzeTest) {
+        await sendMessage(
+          chatId,
+          "در حال تحلیل برگه‌ی آزمایش… 🧪⏳ (ممکنه چند ثانیه طول بکشه)",
+        );
 
-        if (analyze) {
-          console.log("[Photo] Starting lab test analysis...");
+        try {
+          const photo = update.message.photo[update.message.photo.length - 1];
+          console.log(`[Photo] Processing lab test, file_id: ${photo.file_id}`);
+
           const analysis = await analyzeLabTestImage(photo.file_id);
-          console.log(`[Photo] Analysis complete, length: ${analysis.length}`);
+          console.log(`[Photo] Lab analysis complete, length: ${analysis.length}`);
           await sendMessage(chatId, "🔬 تحلیل آزمایش:\n\n" + analysis);
           if (session.labTestMode) session.labTestMode = false;
-        } else {
-          const prompt = session.labTestMode
-            ? "تو یک دکتر متخصص آزمایشگاه هستی. این تصویر نتایج آزمایش یک بیمار است. لطفا:\n- تمام پارامترهای آزمایش را استخراج کن\n- مقادیر غیرطبیعی را مشخص کن\n- تحلیل کامل و توضیحات ساده ارائه بده\n- توصیه‌های لازم را بده\n- در انتها هشدار بده که این تحلیل جایگزین نظر پزشک نیست."
-            : "تو یک دکتر متخصص هستی. این تصویر مربوط به یک بیمار است. لطفا تصویر را تحلیل کن و توضیحات پزشکی مفید ارائه بده.";
-
-          console.log("[Photo] Starting general image analysis...");
-          const analysis = await analyzeImageWithGemini(photo.file_id, prompt);
-          console.log(`[Photo] Analysis complete, length: ${analysis.length}`);
-          await sendMessage(chatId, "🔬 تحلیل تصویر:\n\n" + analysis);
-          if (session.labTestMode) session.labTestMode = false;
+        } catch (error) {
+          console.error("[Photo] Lab test error:", error.message, error.stack);
+          await sendMessage(chatId, `❌ خطا در تحلیل آزمایش: ${error.message}`);
         }
-      } catch (error) {
-        console.error("[Photo] Error:", error.message, error.stack);
-        await sendMessage(chatId, `❌ خطا در پردازش تصویر: ${error.message}`);
+      } else {
+        await sendMessage(chatId, "⏳ در حال پردازش و تحلیل تصویر...");
+        
+        try {
+          const photo = update.message.photo[update.message.photo.length - 1];
+          console.log(`[Photo] Processing general image, file_id: ${photo.file_id}`);
+
+          const prompt = "تو یک دکتر متخصص هستی. این تصویر مربوط به یک بیمار است. لطفا تصویر را تحلیل کن و توضیحات پزشکی مفید ارائه بده.";
+          const analysis = await analyzeImageWithGemini(photo.file_id, prompt);
+          console.log(`[Photo] General analysis complete, length: ${analysis.length}`);
+          await sendMessage(chatId, "🔬 تحلیل تصویر:\n\n" + analysis);
+        } catch (error) {
+          console.error("[Photo] General image error:", error.message, error.stack);
+          await sendMessage(chatId, `❌ خطا در پردازش تصویر: ${error.message}`);
+        }
       }
 
       return res.status(200).json({ ok: true });
@@ -410,22 +580,31 @@ module.exports = async (req, res) => {
       s.visitStarted = true;
       const keyboard = {
         keyboard: [
-          [{ text: "تحلیل آزمایش" }],
+          [{ text: "تحلیل آزمایش" }, { text: "تحلیل دارو" }],
           [{ text: "پایان ویزیت" }, { text: "شروع ویزیت جدید" }],
         ],
         resize_keyboard: true,
       };
       await sendMessage(
         chatId,
-        "👨‍⚕️ سلام، من دکتر هوش مصنوعی شما هستم.\n\nلطفا مشکل یا علائم خود را توضیح دهید.\n\n🔬 می‌توانید نتایج آزمایش (عکس یا متن) را برای تحلیل ارسال کنید.\n\n⚠️ توجه: این مشاوره جایگزین ویزیت حضوری نیست.",
+        "👨‍⚕️ سلام، من دکتر هوش مصنوعی شما هستم.\n\nلطفا مشکل یا علائم خود را توضیح دهید.\n\n🔬 می‌توانید نتایج آزمایش را برای تحلیل ارسال کنید.\n💊 می‌توانید داروهای مصرفی خود را برای تحلیل ارسال کنید.\n\n⚠️ توجه: این مشاوره جایگزین ویزیت حضوری نیست.",
         keyboard,
       );
     } else if (userMessage === "تحلیل آزمایش") {
       session.visitStarted = true;
       session.labTestMode = true;
+      session.medicineMode = false;
       await sendMessage(
         chatId,
         "🔬 لطفا نتایج آزمایش خود را ارسال کنید.\n\nمی‌توانید:\n• عکس آزمایش را ارسال کنید\n• یا نتایج را تایپ کنید",
+      );
+    } else if (userMessage === "تحلیل دارو") {
+      session.visitStarted = true;
+      session.medicineMode = true;
+      session.labTestMode = false;
+      await sendMessage(
+        chatId,
+        "💊 لطفا داروهای مصرفی خود را ارسال کنید.\n\nمی‌توانید:\n• عکس داروها را ارسال کنید\n• یا نام داروها را تایپ کنید\n\nمثال: جنتامایسین، استامینوفن، ایبوپروفن",
       );
     } else if (userMessage === "پایان ویزیت") {
       clearSession(chatId);
@@ -439,7 +618,7 @@ module.exports = async (req, res) => {
       s.visitStarted = true;
       const keyboard = {
         keyboard: [
-          [{ text: "تحلیل آزمایش" }],
+          [{ text: "تحلیل آزمایش" }, { text: "تحلیل دارو" }],
           [{ text: "پایان ویزیت" }, { text: "شروع ویزیت جدید" }],
         ],
         resize_keyboard: true,
@@ -452,14 +631,27 @@ module.exports = async (req, res) => {
     } else {
       if (!session.visitStarted) {
         const keyboard = {
-          keyboard: [[{ text: "شروع ویزیت" }, { text: "تحلیل آزمایش" }]],
+          keyboard: [
+            [{ text: "شروع ویزیت" }],
+            [{ text: "تحلیل آزمایش" }, { text: "تحلیل دارو" }],
+          ],
           resize_keyboard: true,
         };
         await sendMessage(
           chatId,
-          "👋 سلام! لطفا یکی از گزینه‌ها را انتخاب کنید:\n\n• شروع ویزیت: مشاوره پزشکی\n• تحلیل آزمایش: تحلیل نتایج آزمایش",
+          "👋 سلام! لطفا یکی از گزینه‌ها را انتخاب کنید:\n\n• شروع ویزیت: مشاوره پزشکی\n• تحلیل آزمایش: تحلیل نتایج آزمایش\n• تحلیل دارو: اطلاعات کامل درباره داروها",
           keyboard,
         );
+      } else if (session.medicineMode) {
+        try {
+          await sendMessage(chatId, "⏳ در حال تحلیل داروها...");
+          const analysis = await analyzeMedicineText(userMessage);
+          await sendMessage(chatId, "💊 تحلیل داروها:\n\n" + analysis);
+          session.medicineMode = false;
+        } catch (e) {
+          console.error("Medicine text exception:", e);
+          await sendMessage(chatId, `خطا: ${e.message}`);
+        }
       } else if (session.labTestMode) {
         try {
           const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
