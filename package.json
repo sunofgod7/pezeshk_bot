@@ -2,10 +2,10 @@
   "name": "bale-echo-bot",
   "version": "1.0.0",
   "description": "Bale Echo Bot - Repeats user messages",
-  "main": "api/webhook.js",
+  "main": "server.js",
   "scripts": {
-    "dev": "vercel dev",
-    "deploy": "vercel"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
   "dependencies": {
     "node-fetch": "^2.6.7"
