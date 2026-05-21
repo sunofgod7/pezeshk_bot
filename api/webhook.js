@@ -143,6 +143,7 @@ function getSession(chatId) {
       visitStarted: false,
       labTestMode: false,
       medicineMode: false,
+      mriMode: false,
     });
   }
   return userSessions.get(chatId);
@@ -250,6 +251,166 @@ async function analyzeImageWithGemini(fileId, prompt) {
     return data.candidates[0].content.parts[0].text;
   }
   throw new Error("پاسخی از Gemini دریافت نشد");
+}
+
+// ---------- MRI/Radiology analysis ----------
+async function analyzeMRIImage(fileId) {
+  try {
+    console.log("[analyzeMRIImage] Starting...");
+    const { bytes, mime: ct, path } = await getFileBytes(fileId);
+    console.log(`[analyzeMRIImage] File downloaded: ${bytes.length} bytes`);
+    
+    const mime = guessMime(path, ct);
+    const b64 = toBase64(bytes);
+    console.log(`[analyzeMRIImage] Base64 encoded, mime: ${mime}`);
+
+    const prompt = `تو یک رادیولوژیست و متخصص تصویربرداری پزشکی هستی که تصاویر MRI، CT Scan، رادیوگرافی و سونوگرافی را به زبان فارسی تحلیل می‌کنی.
+
+از روی تصویر پزشکی:
+۱) نوع تصویربرداری را مشخص کن (MRI، CT، X-Ray، سونوگرافی و...)
+۲) ناحیه بدن و زاویه تصویربرداری را شناسایی کن
+۳) یافته‌های قابل مشاهده را به صورت دقیق شرح بده:
+   • 🔍 یافته‌های طبیعی
+   • ⚠️ یافته‌های غیرطبیعی (در صورت وجود)
+   • 📏 اندازه و موقعیت ضایعات (در صورت وجود)
+   • 🎯 ساختارهای آناتومیک قابل مشاهده
+
+۴) تفسیر بالینی:
+   • احتمالات تشخیصی
+   • توصیه‌های بالینی
+   • نیاز به تصویربرداری‌های تکمیلی
+
+۵) توضیحات ساده برای بیمار:
+   • معنی یافته‌ها به زبان ساده
+   • اهمیت بالینی
+   • گام‌های بعدی پیشنهادی
+
+۶) در انتها این هشدار را بیاور: «⚠️ این تحلیل صرفاً جنبه‌ی آموزشی دارد و جایگزین نظر رادیولوژیست و پزشک معالج نیست. حتماً با پزشک متخصص خود مشورت کنید.»
+
+اگر تصویر واضح نیست، کیفیت پایین است یا تصویر پزشکی نیست، صادقانه بگو.
+فقط فارسی بنویس و از Markdown و ایموجی استفاده کن.`;
+
+    console.log("[analyzeMRIImage] Calling Gemini API...");
+    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: prompt },
+              { inline_data: { mime_type: mime, data: b64 } },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.4,
+          topK: 32,
+          topP: 0.9,
+          maxOutputTokens: 5000,
+        },
+      }),
+    });
+
+    console.log(`[analyzeMRIImage] Gemini response status: ${response.status}`);
+    const data = await response.json();
+    
+    if (!response.ok) {
+      console.error("[analyzeMRIImage] Gemini error:", JSON.stringify(data));
+      throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
+    }
+
+    if (data.candidates?.[0]?.content) {
+      const result = data.candidates[0].content.parts[0].text;
+      console.log(`[analyzeMRIImage] Success, result length: ${result.length}`);
+      return result;
+    }
+    
+    console.error("[analyzeMRIImage] No content in response:", JSON.stringify(data));
+    throw new Error("پاسخی از Gemini دریافت نشد");
+  } catch (error) {
+    console.error("[analyzeMRIImage] Exception:", error.message, error.stack);
+    throw error;
+  }
+}
+
+// ---------- MRI/Radiology analysis ----------
+async function analyzeMRIImage(fileId) {
+  try {
+    console.log("[analyzeMRIImage] Starting...");
+    const { bytes, mime: ct, path } = await getFileBytes(fileId);
+    console.log(`[analyzeMRIImage] File downloaded: ${bytes.length} bytes`);
+    
+    const mime = guessMime(path, ct);
+    const b64 = toBase64(bytes);
+    console.log(`[analyzeMRIImage] Base64 encoded, mime: ${mime}`);
+
+    const prompt = `تو یک رادیولوژیست و متخصص تصویربرداری پزشکی هستی که تصاویر MRI، CT Scan، رادیوگرافی و سایر تصاویر رادیولوژی را به زبان فارسی تحلیل می‌کنی.
+
+از روی تصویر رادیولوژی:
+۱) 🔍 **نوع تصویربرداری**: مشخص کن این تصویر چه نوع تصویربرداری است (MRI، CT، X-Ray، سونوگرافی و...)
+۲) 🎯 **ناحیه بدن**: کدام قسمت از بدن تصویربرداری شده (مغز، ستون فقرات، زانو، قفسه سینه و...)
+۳) 📊 **یافته‌های طبیعی**: ساختارهای طبیعی و سالم که در تصویر دیده می‌شوند
+۴) ⚠️ **یافته‌های غیرطبیعی**: هر گونه ناهنجاری، آسیب، تومور، التهاب یا مشکل که مشاهده می‌شود
+۵) 🔬 **تفسیر بالینی**: این یافته‌ها چه معنایی دارند و ممکن است نشانه چه بیماری‌هایی باشند
+۶) 💡 **توصیه‌های بعدی**: 
+   - آیا نیاز به تصویربرداری تکمیلی است؟
+   - آیا باید به متخصص خاصی مراجعه شود؟
+   - آیا نیاز به آزمایش‌های بیشتر است؟
+۷) 📋 **سطح اورژانسی**: آیا یافته‌ها نیاز به مراجعه فوری دارند یا می‌توان در نوبت عادی پیگیری کرد
+
+**نکات مهم:**
+- اگر تصویر واضح نیست یا کیفیت پایین است، صادقانه بگو
+- اگر یافته‌های مشکوک یا نگران‌کننده دیدی، تاکید کن که حتماً به پزشک مراجعه شود
+- از زبان ساده و قابل فهم استفاده کن
+- در صورت عدم قطعیت، احتمالات مختلف را ذکر کن
+
+در انتها این هشدار را بیاور: «⚠️ این تحلیل صرفاً جنبه‌ی آموزشی دارد و جایگزین نظر رادیولوژیست و پزشک معالج نیست. حتماً با پزشک متخصص خود مشورت کنید.»
+
+فقط فارسی بنویس و از Markdown و ایموجی استفاده کن.`;
+
+    console.log("[analyzeMRIImage] Calling Gemini API...");
+    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: prompt },
+              { inline_data: { mime_type: mime, data: b64 } },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.4,
+          topK: 32,
+          topP: 0.9,
+          maxOutputTokens: 5000,
+        },
+      }),
+    });
+
+    console.log(`[analyzeMRIImage] Gemini response status: ${response.status}`);
+    const data = await response.json();
+    
+    if (!response.ok) {
+      console.error("[analyzeMRIImage] Gemini error:", JSON.stringify(data));
+      throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
+    }
+
+    if (data.candidates?.[0]?.content) {
+      const result = data.candidates[0].content.parts[0].text;
+      console.log(`[analyzeMRIImage] Success, result length: ${result.length}`);
+      return result;
+    }
+    
+    console.error("[analyzeMRIImage] No content in response:", JSON.stringify(data));
+    throw new Error("پاسخی از Gemini دریافت نشد");
+  } catch (error) {
+    console.error("[analyzeMRIImage] Exception:", error.message, error.stack);
+    throw error;
+  }
 }
 
 // ---------- Medicine analysis ----------
@@ -479,6 +640,49 @@ function wantsMedicineAnalysis(caption) {
   );
 }
 
+function wantsMRIAnalysis(caption) {
+  if (!caption) return false;
+  const c = caption.toLowerCase();
+  return (
+    c.includes("/mri") ||
+    c.includes("/ct") ||
+    c.includes("/xray") ||
+    c.includes("/scan") ||
+    c.includes("/radio") ||
+    caption.includes("ام آر آی") ||
+    caption.includes("ام ار ای") ||
+    caption.includes("سی تی") ||
+    caption.includes("سی‌تی") ||
+    caption.includes("اسکن") ||
+    caption.includes("رادیو") ||
+    caption.includes("رادیولوژی") ||
+    caption.includes("عکس") ||
+    caption.includes("تصویر")
+  );
+}
+
+function wantsMRIAnalysis(caption) {
+  if (!caption) return false;
+  const c = caption.toLowerCase();
+  return (
+    c.includes("/mri") ||
+    c.includes("/ct") ||
+    c.includes("/xray") ||
+    c.includes("/scan") ||
+    c.includes("/radiology") ||
+    caption.includes("ام آر آی") ||
+    caption.includes("ام ار ای") ||
+    caption.includes("سی تی") ||
+    caption.includes("سی‌تی") ||
+    caption.includes("اسکن") ||
+    caption.includes("رادیولوژی") ||
+    caption.includes("رادیوگرافی") ||
+    caption.includes("سونوگرافی") ||
+    caption.includes("سونو") ||
+    caption.includes("اشعه")
+  );
+}
+
 // ---------- Webhook ----------
 module.exports = async (req, res) => {
   if (req.method !== "POST") return res.status(200).json({ ok: true });
@@ -498,7 +702,7 @@ module.exports = async (req, res) => {
         console.log("[Photo] Visit not started, asking user to start");
         await sendMessage(
           chatId,
-          'لطفا ابتدا "شروع ویزیت"، "تحلیل آزمایش" یا "تحلیل دارو" را انتخاب کنید.',
+          'لطفا ابتدا "شروع ویزیت"، "تحلیل آزمایش"، "تحلیل دارو" یا "تحلیل MRI" را انتخاب کنید.',
         );
         return res.status(200).json({ ok: true });
       }
@@ -506,11 +710,30 @@ module.exports = async (req, res) => {
       const caption = update.message.caption || "";
       const analyzeTest = wantsAnalysis(caption);
       const analyzeMedicine = wantsMedicineAnalysis(caption);
+      const analyzeMRI = wantsMRIAnalysis(caption);
       
-      console.log(`[Photo] Caption: "${caption}", Test mode: ${analyzeTest}, Medicine mode: ${analyzeMedicine}, Lab mode: ${session.labTestMode}, Medicine session: ${session.medicineMode}`);
+      console.log(`[Photo] Caption: "${caption}", Test: ${analyzeTest}, Medicine: ${analyzeMedicine}, MRI: ${analyzeMRI}, Lab session: ${session.labTestMode}, Medicine session: ${session.medicineMode}, MRI session: ${session.mriMode}`);
 
       // تشخیص خودکار بر اساس حالت فعلی
-      if (session.medicineMode || analyzeMedicine) {
+      if (session.mriMode || analyzeMRI) {
+        await sendMessage(
+          chatId,
+          "در حال تحلیل تصویر رادیولوژی… 🔬⏳ (ممکنه چند ثانیه طول بکشه)",
+        );
+
+        try {
+          const photo = update.message.photo[update.message.photo.length - 1];
+          console.log(`[Photo] Processing MRI image, file_id: ${photo.file_id}`);
+          
+          const analysis = await analyzeMRIImage(photo.file_id);
+          console.log(`[Photo] MRI analysis complete, length: ${analysis.length}`);
+          await sendMessage(chatId, "🔬 تحلیل تصویر رادیولوژی:\n\n" + analysis);
+          if (session.mriMode) session.mriMode = false;
+        } catch (error) {
+          console.error("[Photo] MRI error:", error.message, error.stack);
+          await sendMessage(chatId, `❌ خطا در تحلیل تصویر: ${error.message}`);
+        }
+      } else if (session.medicineMode || analyzeMedicine) {
         await sendMessage(
           chatId,
           "در حال تحلیل داروها… 💊⏳ (ممکنه چند ثانیه طول بکشه)",
@@ -581,19 +804,21 @@ module.exports = async (req, res) => {
       const keyboard = {
         keyboard: [
           [{ text: "تحلیل آزمایش" }, { text: "تحلیل دارو" }],
+          [{ text: "تحلیل MRI" }],
           [{ text: "پایان ویزیت" }, { text: "شروع ویزیت جدید" }],
         ],
         resize_keyboard: true,
       };
       await sendMessage(
         chatId,
-        "👨‍⚕️ سلام، من دکتر هوش مصنوعی شما هستم.\n\nلطفا مشکل یا علائم خود را توضیح دهید.\n\n🔬 می‌توانید نتایج آزمایش را برای تحلیل ارسال کنید.\n💊 می‌توانید داروهای مصرفی خود را برای تحلیل ارسال کنید.\n\n⚠️ توجه: این مشاوره جایگزین ویزیت حضوری نیست.",
+        "👨‍⚕️ سلام، من دکتر هوش مصنوعی شما هستم.\n\nلطفا مشکل یا علائم خود را توضیح دهید.\n\n🔬 می‌توانید نتایج آزمایش را برای تحلیل ارسال کنید.\n💊 می‌توانید داروهای مصرفی خود را برای تحلیل ارسال کنید.\n🩻 می‌توانید تصاویر MRI، CT، رادیوگرافی را برای تحلیل ارسال کنید.\n\n⚠️ توجه: این مشاوره جایگزین ویزیت حضوری نیست.",
         keyboard,
       );
     } else if (userMessage === "تحلیل آزمایش") {
       session.visitStarted = true;
       session.labTestMode = true;
       session.medicineMode = false;
+      session.mriMode = false;
       await sendMessage(
         chatId,
         "🔬 لطفا نتایج آزمایش خود را ارسال کنید.\n\nمی‌توانید:\n• عکس آزمایش را ارسال کنید\n• یا نتایج را تایپ کنید",
@@ -602,9 +827,19 @@ module.exports = async (req, res) => {
       session.visitStarted = true;
       session.medicineMode = true;
       session.labTestMode = false;
+      session.mriMode = false;
       await sendMessage(
         chatId,
         "💊 لطفا داروهای مصرفی خود را ارسال کنید.\n\nمی‌توانید:\n• عکس داروها را ارسال کنید\n• یا نام داروها را تایپ کنید\n\nمثال: جنتامایسین، استامینوفن، ایبوپروفن",
+      );
+    } else if (userMessage === "تحلیل MRI" || userMessage === "تحلیل ام آر آی") {
+      session.visitStarted = true;
+      session.mriMode = true;
+      session.labTestMode = false;
+      session.medicineMode = false;
+      await sendMessage(
+        chatId,
+        "🩻 لطفا تصویر رادیولوژی خود را ارسال کنید.\n\nانواع تصاویر قابل تحلیل:\n• MRI (ام آر آی)\n• CT Scan (سی تی اسکن)\n• X-Ray (رادیوگرافی)\n• سونوگرافی\n• و سایر تصاویر پزشکی\n\n💡 برای نتیجه بهتر، تصویر با کیفیت بالا ارسال کنید.",
       );
     } else if (userMessage === "پایان ویزیت") {
       clearSession(chatId);
@@ -619,6 +854,7 @@ module.exports = async (req, res) => {
       const keyboard = {
         keyboard: [
           [{ text: "تحلیل آزمایش" }, { text: "تحلیل دارو" }],
+          [{ text: "تحلیل MRI" }],
           [{ text: "پایان ویزیت" }, { text: "شروع ویزیت جدید" }],
         ],
         resize_keyboard: true,
@@ -634,12 +870,13 @@ module.exports = async (req, res) => {
           keyboard: [
             [{ text: "شروع ویزیت" }],
             [{ text: "تحلیل آزمایش" }, { text: "تحلیل دارو" }],
+            [{ text: "تحلیل MRI" }],
           ],
           resize_keyboard: true,
         };
         await sendMessage(
           chatId,
-          "👋 سلام! لطفا یکی از گزینه‌ها را انتخاب کنید:\n\n• شروع ویزیت: مشاوره پزشکی\n• تحلیل آزمایش: تحلیل نتایج آزمایش\n• تحلیل دارو: اطلاعات کامل درباره داروها",
+          "👋 سلام! لطفا یکی از گزینه‌ها را انتخاب کنید:\n\n• شروع ویزیت: مشاوره پزشکی\n• تحلیل آزمایش: تحلیل نتایج آزمایش\n• تحلیل دارو: اطلاعات کامل درباره داروها\n• تحلیل MRI: تحلیل تصاویر رادیولوژی",
           keyboard,
         );
       } else if (session.medicineMode) {
