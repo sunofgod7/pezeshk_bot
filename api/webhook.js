@@ -89,13 +89,13 @@ async function getGeminiResponse(chatId, userMessage) {
 
 ${conversationHistory ? 'تاریخچه مکالمه:\n' + conversationHistory + '\n\n' : ''}پیام جدید بیمار: ${userMessage}`;
 
-    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-3.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: systemPrompt }] }],
-        generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 1024 }
+        generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 10000 }
       })
     });
     
@@ -150,13 +150,15 @@ module.exports = async (req, res) => {
           
           console.log('Getting file info for:', fileId);
           
-          // دریافت اطلاعات فایل بدون timeout
+          // دریافت اطلاعات فایل با GET method
           const fileResponse = await fetch(`${BALE_API}/getFile?file_id=${fileId}`, {
-            method: 'POST',
+            method: 'GET',
             headers: { 'Content-Type': 'application/json' }
           });
           
           if (!fileResponse.ok) {
+            const errorText = await fileResponse.text();
+            console.error('File response error:', errorText);
             throw new Error(`خطا در دریافت اطلاعات فایل: ${fileResponse.status}`);
           }
           
@@ -164,6 +166,7 @@ module.exports = async (req, res) => {
           console.log('File data:', JSON.stringify(fileData));
           
           if (!fileData.ok || !fileData.result || !fileData.result.file_path) {
+            console.error('Invalid file data:', fileData);
             throw new Error('اطلاعات فایل معتبر نیست');
           }
           
@@ -172,8 +175,13 @@ module.exports = async (req, res) => {
           
           console.log('Downloading image from:', fileUrl);
           
-          // دانلود تصویر
-          const imageResponse = await fetch(fileUrl);
+          // دانلود تصویر با timeout
+          const imageResponse = await Promise.race([
+            fetch(fileUrl),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Timeout در دانلود تصویر')), 30000)
+            )
+          ]);
           
           if (!imageResponse.ok) {
             throw new Error(`خطا در دانلود تصویر: ${imageResponse.status}`);
@@ -189,42 +197,48 @@ module.exports = async (req, res) => {
             ? 'تو یک دکتر متخصص آزمایشگاه هستی. این تصویر نتایج آزمایش یک بیمار است. لطفا:\n- تمام پارامترهای آزمایش را استخراج کن\n- مقادیر غیرطبیعی را مشخص کن\n- تحلیل کامل و توضیحات ساده ارائه بده\n- توصیه‌های لازم را بده'
             : 'تو یک دکتر متخصص هستی. این تصویر مربوط به یک بیمار است. لطفا تصویر را تحلیل کن و توضیحات پزشکی مفید ارائه بده.';
           
-          const url = `https://generativelanguage.googleapis.com/v1/models/gemini-3.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+          const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
           
           console.log('Sending to Gemini Vision API...');
-          const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{
-                parts: [
-                  { text: visionPrompt },
-                  { inline_data: { mime_type: 'image/jpeg', data: base64Image } }
-                ]
-              }],
-              generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 1024 }
-            })
-          });
+          const geminiResponse = await Promise.race([
+            fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{
+                  parts: [
+                    { text: visionPrompt },
+                    { inline_data: { mime_type: 'image/jpeg', data: base64Image } }
+                  ]
+                }],
+                generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 10000 }
+              })
+            }),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Timeout در ارتباط با Gemini')), 30000)
+            )
+          ]);
           
-          if (!response.ok) {
-            const errorData = await response.json();
+          if (!geminiResponse.ok) {
+            const errorData = await geminiResponse.json();
             console.error('Gemini API Error:', errorData);
-            throw new Error(`خطای Gemini: ${errorData.error?.message || response.status}`);
+            throw new Error(`خطای Gemini: ${errorData.error?.message || geminiResponse.status}`);
           }
           
-          const data = await response.json();
-          console.log('Gemini response received');
+          const data = await geminiResponse.json();
+          console.log('Gemini response received:', JSON.stringify(data));
           
-          if (data.candidates && data.candidates[0] && data.candidates[0].content) {
+          if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) {
             const analysis = data.candidates[0].content.parts[0].text;
             await sendMessage(chatId, '🔬 تحلیل تصویر:\n\n' + analysis);
             if (session.labTestMode) session.labTestMode = false;
           } else {
-            await sendMessage(chatId, 'متاسفم، نتوانستم تصویر را تحلیل کنم. لطفا دوباره امتحان کنید.');
+            console.error('Unexpected Gemini response structure:', data);
+            throw new Error('ساختار پاسخ Gemini نامعتبر است');
           }
         } catch (error) {
           console.error('Photo processing error:', error);
-          await sendMessage(chatId, `❌ خطا در پردازش تصویر: ${error.message}\n\nلطفا دوباره تلاش کنید.`);
+          await sendMessage(chatId, `❌ خطا در پردازش تصویر: ${error.message}\n\nلطفا دوباره تلاش کنید یا نتایج را به صورت متن ارسال کنید.`);
         }
         
         return res.status(200).json({ ok: true });
@@ -281,13 +295,13 @@ module.exports = async (req, res) => {
           if (session.labTestMode) {
             const labPrompt = `تو یک دکتر متخصص آزمایشگاه هستی. نتایج آزمایش را تحلیل کن، مقادیر غیرطبیعی را مشخص کن، توضیح ساده بده و توصیه‌های لازم را ارائه کن.\n\nنتایج: ${userMessage}`;
 
-            const url = `https://generativelanguage.googleapis.com/v1/models/gemini-3.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+            const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
             const response = await fetch(url, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 contents: [{ parts: [{ text: labPrompt }] }],
-                generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 1024 }
+                generationConfig: { temperature: 0.7, topK: 40, topP: 0.95, maxOutputTokens: 10000 }
               })
             });
             
