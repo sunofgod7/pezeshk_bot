@@ -205,16 +205,25 @@ module.exports = async (req, res) => {
         
         const keyboard = {
           keyboard: [
-            [{ text: 'پایان ویزیت' }],
-            [{ text: 'شروع ویزیت جدید' }]
+            [{ text: 'تحلیل آزمایش' }],
+            [{ text: 'پایان ویزیت' }, { text: 'شروع ویزیت جدید' }]
           ],
           resize_keyboard: true
         };
         
         await sendMessage(
           chatId, 
-          '👨‍⚕️ سلام، من دکتر هوش مصنوعی شما هستم.\n\nلطفا مشکل یا علائم خود را به طور کامل توضیح دهید. من چند سوال از شما خواهم پرسید تا بتوانم بهترین راهنمایی را به شما ارائه دهم.\n\n⚠️ توجه: این مشاوره جایگزین ویزیت حضوری نزد پزشک نیست.',
+          '👨‍⚕️ سلام، من دکتر هوش مصنوعی شما هستم.\n\nلطفا مشکل یا علائم خود را به طور کامل توضیح دهید. من چند سوال از شما خواهم پرسید تا بتوانم بهترین راهنمایی را به شما ارائه دهم.\n\n🔬 همچنین می‌توانید نتایج آزمایش خود را برای تحلیل ارسال کنید.\n\n⚠️ توجه: این مشاوره جایگزین ویزیت حضوری نزد پزشک نیست.',
           keyboard
+        );
+        
+      } else if (userMessage.toLowerCase() === 'تحلیل آزمایش') {
+        session.visitStarted = true;
+        session.labTestMode = true;
+        
+        await sendMessage(
+          chatId,
+          '🔬 لطفا نتایج آزمایش خود را ارسال کنید.\n\nمی‌توانید:\n• عکس آزمایش را ارسال کنید\n• یا نتایج را تایپ کنید\n\nمثال:\n"CBC: WBC=8000, RBC=4.5, HGB=13.5"\n"قند ناشتا: 110"\n"کراتینین: 1.2"'
         );
         
       } else if (userMessage.toLowerCase() === 'پایان ویزیت') {
@@ -229,9 +238,18 @@ module.exports = async (req, res) => {
         const newSession = getSession(chatId);
         newSession.visitStarted = true;
         
+        const keyboard = {
+          keyboard: [
+            [{ text: 'تحلیل آزمایش' }],
+            [{ text: 'پایان ویزیت' }, { text: 'شروع ویزیت جدید' }]
+          ],
+          resize_keyboard: true
+        };
+        
         await sendMessage(
           chatId,
-          '👨‍⚕️ ویزیت جدید شروع شد.\n\nلطفا مشکل یا علائم خود را توضیح دهید.'
+          '👨‍⚕️ ویزیت جدید شروع شد.\n\nلطفا مشکل یا علائم خود را توضیح دهید.',
+          keyboard
         );
         
       } else {
@@ -239,20 +257,67 @@ module.exports = async (req, res) => {
         if (!session.visitStarted) {
           const keyboard = {
             keyboard: [
-              [{ text: 'شروع ویزیت' }]
+              [{ text: 'شروع ویزیت' }, { text: 'تحلیل آزمایش' }]
             ],
             resize_keyboard: true
           };
           
           await sendMessage(
             chatId,
-            '👋 سلام! برای شروع مشاوره پزشکی، لطفا روی دکمه "شروع ویزیت" کلیک کنید.',
+            '👋 سلام! برای شروع مشاوره پزشکی، لطفا یکی از گزینه‌ها را انتخاب کنید:\n\n• شروع ویزیت: برای مشاوره پزشکی\n• تحلیل آزمایش: برای تحلیل نتایج آزمایش',
             keyboard
           );
         } else {
-          // پاسخ به سوال بیمار
-          const geminiResponse = await getGeminiResponse(chatId, userMessage);
-          await sendMessage(chatId, geminiResponse);
+          // بررسی حالت تحلیل آزمایش
+          if (session.labTestMode) {
+            const labPrompt = `تو یک دکتر متخصص آزمایشگاه و پاتولوژیست هستی. وظیفه‌ات تحلیل نتایج آزمایش بیماران است.
+
+رفتار تو باید این‌گونه باشه:
+- نتایج آزمایش را به دقت بررسی کن
+- مقادیر غیرطبیعی را مشخص کن
+- توضیح ساده و قابل فهم از هر پارامتر بده
+- احتمالات تشخیصی را بر اساس نتایج ذکر کن
+- در صورت نیاز، آزمایش‌های تکمیلی پیشنهاد بده
+- توصیه کن که حتما با پزشک معالج مشورت کنند
+- پاسخ‌هایت را کوتاه و مفید نگه دار
+
+نتایج آزمایش بیمار: ${userMessage}`;
+
+            const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{
+                  parts: [{
+                    text: labPrompt
+                  }]
+                }],
+                generationConfig: {
+                  temperature: 0.7,
+                  topK: 40,
+                  topP: 0.95,
+                  maxOutputTokens: 600
+                }
+              })
+            });
+            
+            const data = await response.json();
+            
+            if (data.candidates && data.candidates[0] && data.candidates[0].content) {
+              const labAnalysis = data.candidates[0].content.parts[0].text;
+              await sendMessage(chatId, '🔬 تحلیل آزمایش:\n\n' + labAnalysis);
+              
+              // خروج از حالت آزمایش
+              session.labTestMode = false;
+            } else {
+              await sendMessage(chatId, 'متاسفم، نتوانستم آزمایش را تحلیل کنم. لطفا دوباره امتحان کنید.');
+            }
+          } else {
+            // پاسخ به سوال بیمار
+            const geminiResponse = await getGeminiResponse(chatId, userMessage);
+            await sendMessage(chatId, geminiResponse);
+          }
         }
       }
     }
