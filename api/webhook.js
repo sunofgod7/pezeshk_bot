@@ -4,6 +4,9 @@ const BALE_TOKEN = process.env.BALE_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const BALE_API = `https://tapi.bale.ai/bot${BALE_TOKEN}`;
 
+const GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1/models/${GEMINI_MODEL}:generateContent`;
+
 // حافظه موقت برای نگهداری تاریخچه مکالمات
 const userSessions = new Map();
 
@@ -97,9 +100,7 @@ async function getGeminiResponse(chatId, userMessage) {
 
 ${conversationHistory ? "تاریخچه مکالمه:\n" + conversationHistory + "\n\n" : ""}پیام جدید بیمار: ${userMessage}`;
 
-    // برگشت به مدل اصلی شما
-    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-3.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-    const response = await fetch(url, {
+    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -116,7 +117,7 @@ ${conversationHistory ? "تاریخچه مکالمه:\n" + conversationHistory +
     const data = await response.json();
 
     if (!response.ok) {
-      console.error("Gemini API Error:", data);
+      console.error("Gemini API Error:", JSON.stringify(data));
       return `خطا: ${data.error?.message || "مشکل در ارتباط با Gemini"}`;
     }
 
@@ -171,10 +172,6 @@ module.exports = async (req, res) => {
           // دریافت اطلاعات فایل
           const fileResponse = await fetch(
             `${BALE_API}/getFile?file_id=${fileId}`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-            },
           );
 
           if (!fileResponse.ok) {
@@ -187,7 +184,9 @@ module.exports = async (req, res) => {
           console.log("File data:", JSON.stringify(fileData));
 
           if (!fileData.ok || !fileData.result || !fileData.result.file_path) {
-            throw new Error("اطلاعات فایل معتبر نیست");
+            throw new Error(
+              "اطلاعات فایل معتبر نیست: " + JSON.stringify(fileData),
+            );
           }
 
           const filePath = fileData.result.file_path;
@@ -202,71 +201,97 @@ module.exports = async (req, res) => {
             throw new Error(`خطا در دانلود تصویر: ${imageResponse.status}`);
           }
 
+          const contentType =
+            imageResponse.headers.get("content-type") || "image/jpeg";
+          const mimeType = contentType.includes("png")
+            ? "image/png"
+            : contentType.includes("webp")
+              ? "image/webp"
+              : "image/jpeg";
+
           const arrayBuffer = await imageResponse.arrayBuffer();
           const imageBuffer = Buffer.from(arrayBuffer);
           const base64Image = imageBuffer.toString("base64");
 
-          console.log("Image downloaded, size:", base64Image.length);
+          console.log(
+            "Image downloaded, size:",
+            imageBuffer.length,
+            "bytes, mime:",
+            mimeType,
+          );
+
+          if (imageBuffer.length < 100) {
+            throw new Error(
+              "تصویر دانلود شده خیلی کوچک است، احتمالاً خراب است",
+            );
+          }
 
           const visionPrompt = session.labTestMode
             ? "تو یک دکتر متخصص آزمایشگاه هستی. این تصویر نتایج آزمایش یک بیمار است. لطفا:\n- تمام پارامترهای آزمایش را استخراج کن\n- مقادیر غیرطبیعی را مشخص کن\n- تحلیل کامل و توضیحات ساده ارائه بده\n- توصیه‌های لازم را بده"
             : "تو یک دکتر متخصص هستی. این تصویر مربوط به یک بیمار است. لطفا تصویر را تحلیل کن و توضیحات پزشکی مفید ارائه بده.";
 
-          // برگشت به مدل اصلی شما
-          const url = `https://generativelanguage.googleapis.com/v1/models/gemini-3.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-
           console.log("Sending to Gemini Vision API...");
-          const response = await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [
-                {
-                  parts: [
-                    { text: visionPrompt },
-                    // اصلاح اصلی: استفاده از camelCase برای قوانین لود کردن مدیا در گوگل API
-                    {
-                      inlineData: { mimeType: "image/jpeg", data: base64Image },
-                    },
-                  ],
-                },
-              ],
-              generationConfig: {
-                temperature: 0.7,
-                topK: 40,
-                topP: 0.95,
-                maxOutputTokens: 10000,
-              },
-            }),
-          });
 
-          if (!response.ok) {
-            const errorData = await response.json();
-            console.error("Gemini API Error:", errorData);
+          const geminiResponse = await fetch(
+            `${GEMINI_URL}?key=${GEMINI_API_KEY}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [
+                  {
+                    parts: [
+                      { text: visionPrompt },
+                      {
+                        inline_data: { mime_type: mimeType, data: base64Image },
+                      },
+                    ],
+                  },
+                ],
+                generationConfig: {
+                  temperature: 0.7,
+                  topK: 40,
+                  topP: 0.95,
+                  maxOutputTokens: 10000,
+                },
+              }),
+            },
+          );
+
+          const geminiData = await geminiResponse.json();
+
+          if (!geminiResponse.ok) {
+            console.error(
+              "Gemini Vision API Error:",
+              JSON.stringify(geminiData),
+            );
             throw new Error(
-              `خطای Gemini: ${errorData.error?.message || response.status}`,
+              `خطای Gemini: ${geminiData.error?.message || geminiResponse.status}`,
             );
           }
 
-          const data = await response.json();
           console.log("Gemini response received");
 
           if (
-            data.candidates &&
-            data.candidates[0] &&
-            data.candidates[0].content
+            geminiData.candidates &&
+            geminiData.candidates[0] &&
+            geminiData.candidates[0].content
           ) {
-            const analysis = data.candidates[0].content.parts[0].text;
+            const analysis = geminiData.candidates[0].content.parts[0].text;
             await sendMessage(chatId, "🔬 تحلیل تصویر:\n\n" + analysis);
             if (session.labTestMode) session.labTestMode = false;
           } else {
+            console.error(
+              "Unexpected Gemini response:",
+              JSON.stringify(geminiData),
+            );
             await sendMessage(
               chatId,
               "متاسفم، نتوانستم تصویر را تحلیل کنم. لطفا دوباره امتحان کنید.",
             );
           }
         } catch (error) {
-          console.error("Photo processing error:", error);
+          console.error("Photo processing error:", error.message);
           await sendMessage(
             chatId,
             `❌ خطا در پردازش تصویر: ${error.message}\n\nلطفا دوباره تلاش کنید.`,
@@ -351,21 +376,22 @@ module.exports = async (req, res) => {
           if (session.labTestMode) {
             const labPrompt = `تو یک دکتر متخصص آزمایشگاه هستی. نتایج آزمایش را تحلیل کن، مقادیر غیرطبیعی را مشخص کن، توضیح ساده بده و توصیه‌های لازم را ارائه کن.\n\nنتایج: ${userMessage}`;
 
-            // برگشت به مدل اصلی شما
-            const url = `https://generativelanguage.googleapis.com/v1/models/gemini-3.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-            const response = await fetch(url, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                contents: [{ parts: [{ text: labPrompt }] }],
-                generationConfig: {
-                  temperature: 0.7,
-                  topK: 40,
-                  topP: 0.95,
-                  maxOutputTokens: 10000,
-                },
-              }),
-            });
+            const response = await fetch(
+              `${GEMINI_URL}?key=${GEMINI_API_KEY}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  contents: [{ parts: [{ text: labPrompt }] }],
+                  generationConfig: {
+                    temperature: 0.7,
+                    topK: 40,
+                    topP: 0.95,
+                    maxOutputTokens: 10000,
+                  },
+                }),
+              },
+            );
 
             const data = await response.json();
 
