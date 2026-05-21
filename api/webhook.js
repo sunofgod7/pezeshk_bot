@@ -1,15 +1,21 @@
 const fetch = require("node-fetch");
 
 const BALE_TOKEN = process.env.BALE_TOKEN;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const LOVABLE_API_KEY = process.env.LOVABLE_API_KEY;
 const BALE_API = `https://tapi.bale.ai/bot${BALE_TOKEN}`;
-
-const GEMINI_MODEL = "gemini-2.5-flash";
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1/models/${GEMINI_MODEL}:generateContent`;
+const GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
 
 const userSessions = new Map();
 
 // ---------- helpers ----------
+function toBase64(buf) {
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < buf.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, buf.subarray(i, i + CHUNK));
+  }
+  return Buffer.from(binary, "binary").toString("base64");
+}
 
 function guessMime(path, current) {
   let mime = current;
@@ -46,9 +52,10 @@ async function getFileBytes(fileId) {
   );
   if (!imgRes.ok) throw new Error(`خطا در دانلود تصویر: ${imgRes.status}`);
 
-  const buffer = await imgRes.buffer(); // node-fetch روش درست
+  const arrayBuffer = await imgRes.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
   const mime = imgRes.headers.get("content-type")?.split(";")[0]?.trim() || "";
-  return { buffer, mime, path: filePath };
+  return { bytes, mime, path: filePath };
 }
 
 // ---------- Bale sendMessage ----------
@@ -111,7 +118,29 @@ function clearSession(chatId) {
   userSessions.delete(chatId);
 }
 
-// ---------- Gemini text ----------
+// ---------- Gateway helper ----------
+async function gateway(body) {
+  if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
+  const res = await fetch(GATEWAY, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${LOVABLE_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    if (res.status === 429)
+      throw new Error("سرویس شلوغه. چند لحظه دیگه امتحان کن.");
+    if (res.status === 402)
+      throw new Error("اعتبار سرویس تموم شده. لطفاً به ادمین اطلاع بده.");
+    throw new Error(`AI gateway ${res.status}: ${t.slice(0, 300)}`);
+  }
+  return res.json();
+}
+
+// ---------- AI text ----------
 async function getGeminiResponse(chatId, userMessage) {
   try {
     const session = getSession(chatId);
@@ -134,28 +163,13 @@ async function getGeminiResponse(chatId, userMessage) {
 
 ${conversationHistory ? "تاریخچه مکالمه:\n" + conversationHistory + "\n\n" : ""}پیام جدید بیمار: ${userMessage}`;
 
-    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: systemPrompt }] }],
-        generationConfig: {
-          temperature: 0.7,
-          topK: 40,
-          topP: 0.95,
-          maxOutputTokens: 8000,
-        },
-      }),
+    const data = await gateway({
+      model: "google/gemini-2.5-flash",
+      messages: [{ role: "system", content: systemPrompt }],
     });
 
-    const data = await response.json();
-    if (!response.ok) {
-      console.error("Gemini text error:", JSON.stringify(data));
-      return `خطا: ${data.error?.message || "مشکل در ارتباط با Gemini"}`;
-    }
-
-    if (data.candidates?.[0]?.content) {
-      const aiResponse = data.candidates[0].content.parts[0].text;
+    if (data.choices?.[0]?.message?.content) {
+      const aiResponse = data.choices[0].message.content.trim();
       session.history.push({ role: "user", content: userMessage });
       session.history.push({ role: "assistant", content: aiResponse });
       if (session.history.length > 20)
@@ -165,50 +179,88 @@ ${conversationHistory ? "تاریخچه مکالمه:\n" + conversationHistory +
 
     return "متاسفم، در حال حاضر نمی‌توانم پاسخ دهم.";
   } catch (error) {
-    console.error("Gemini text error:", error.message);
+    console.error("AI text error:", error.message);
     return `خطا: ${error.message}`;
   }
 }
 
-// ---------- Gemini vision ----------
+// ---------- AI vision ----------
 async function analyzeImageWithGemini(fileId, prompt) {
-  const { buffer, mime: ct, path } = await getFileBytes(fileId);
+  const { bytes, mime: ct, path } = await getFileBytes(fileId);
   const mime = guessMime(path, ct);
-  const b64 = buffer.toString("base64");
+  const b64 = toBase64(bytes);
 
   console.log(`Image ready: ${bytes.length} bytes, mime: ${mime}`);
 
-  const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [
-        {
-          parts: [
-            { text: prompt },
-            { inline_data: { mime_type: mime, data: b64 } },
-          ],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.7,
-        topK: 40,
-        topP: 0.95,
-        maxOutputTokens: 8000,
+  const data = await gateway({
+    model: "google/gemini-2.5-flash",
+    messages: [
+      {
+        role: "system",
+        content: prompt,
       },
-    }),
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "لطفاً این تصویر را تحلیل کن." },
+          { type: "image_url", image_url: { url: `data:${mime};base64,${b64}` } },
+        ],
+      },
+    ],
   });
 
-  const data = await response.json();
-  if (!response.ok) {
-    console.error("Gemini vision error:", JSON.stringify(data));
-    throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
+  if (data.choices?.[0]?.message?.content) {
+    return data.choices[0].message.content.trim();
   }
+  throw new Error("پاسخی از AI دریافت نشد");
+}
 
-  if (data.candidates?.[0]?.content) {
-    return data.candidates[0].content.parts[0].text;
-  }
-  throw new Error("پاسخی از Gemini دریافت نشد");
+// ---------- Lab test analysis ----------
+async function analyzeLabTestImage(fileId) {
+  const { bytes, mime: ct, path } = await getFileBytes(fileId);
+  const mime = guessMime(path, ct);
+  const b64 = toBase64(bytes);
+
+  const data = await gateway({
+    model: "google/gemini-2.5-pro",
+    messages: [
+      {
+        role: "system",
+        content:
+          "تو یک دستیار پزشکی هستی که نتایج آزمایش‌های پزشکی (خون، ادرار، بیوشیمی، هورمونی و …) را به زبان فارسی روان تحلیل می‌کنی.\n" +
+          "از روی تصویرِ برگه‌ی آزمایش:\n" +
+          "۱) نام آزمایش/پروفایل را بنویس.\n" +
+          "۲) جدولی از هر شاخص بساز با ستون‌های: نام شاخص | مقدار بیمار | محدوده‌ی مرجع | وضعیت (طبیعی/بالا/پایین).\n" +
+          "۳) برای هر مقدار غیرطبیعی، توضیح کوتاه و قابل فهم بده که این یعنی چه و معمولاً به چه دلایلی رخ می‌دهد.\n" +
+          "۴) یک «جمع‌بندی کلی» در ۳–۵ خط بنویس.\n" +
+          "۵) در صورت لزوم، «پیشنهاد گام بعدی» (مثل تکرار آزمایش، مراجعه به متخصص خاص، تغییر سبک زندگی) اضافه کن.\n" +
+          "۶) در انتها این هشدار را بیاور: «این تحلیل صرفاً جنبه‌ی آموزشی دارد و جایگزین نظر پزشک نیست.»\n" +
+          "اگر تصویر برگه‌ی آزمایش نیست یا کیفیتش پایین است، صادقانه بگو و راهنمایی کن دوباره با کیفیت بهتر بفرستد.\n" +
+          "فقط فارسی بنویس و از Markdown ساده استفاده کن.",
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "لطفاً این برگه‌ی آزمایش را به‌صورت کامل تحلیل کن." },
+          { type: "image_url", image_url: { url: `data:${mime};base64,${b64}` } },
+        ],
+      },
+    ],
+  });
+
+  return data.choices?.[0]?.message?.content?.trim() ?? "";
+}
+
+function wantsAnalysis(caption) {
+  if (!caption) return false;
+  const c = caption.toLowerCase();
+  return (
+    c.includes("/analyze") ||
+    c.includes("/test") ||
+    caption.includes("تحلیل") ||
+    caption.includes("آزمایش") ||
+    caption.includes("ازمایش")
+  );
 }
 
 // ---------- Webhook ----------
@@ -232,18 +284,32 @@ module.exports = async (req, res) => {
         return res.status(200).json({ ok: true });
       }
 
-      await sendMessage(chatId, "⏳ شروع پردازش و تحلیل تصویر...");
+      const caption = update.message.caption || "";
+      const analyze = wantsAnalysis(caption);
+
+      await sendMessage(
+        chatId,
+        analyze
+          ? "در حال تحلیل برگه‌ی آزمایش… 🧪⏳ (ممکنه چند ثانیه طول بکشه)"
+          : "⏳ در حال پردازش و تحلیل تصویر...",
+      );
 
       try {
         const photo = update.message.photo[update.message.photo.length - 1];
 
-        const prompt = session.labTestMode
-          ? "تو یک دکتر متخصص آزمایشگاه هستی. این تصویر نتایج آزمایش یک بیمار است. لطفا:\n- تمام پارامترهای آزمایش را استخراج کن\n- مقادیر غیرطبیعی را مشخص کن\n- تحلیل کامل و توضیحات ساده ارائه بده\n- توصیه‌های لازم را بده\n- در انتها هشدار بده که این تحلیل جایگزین نظر پزشک نیست."
-          : "تو یک دکتر متخصص هستی. این تصویر مربوط به یک بیمار است. لطفا تصویر را تحلیل کن و توضیحات پزشکی مفید ارائه بده.";
+        if (analyze) {
+          const analysis = await analyzeLabTestImage(photo.file_id);
+          await sendMessage(chatId, "🔬 تحلیل آزمایش:\n\n" + analysis);
+          if (session.labTestMode) session.labTestMode = false;
+        } else {
+          const prompt = session.labTestMode
+            ? "تو یک دکتر متخصص آزمایشگاه هستی. این تصویر نتایج آزمایش یک بیمار است. لطفا:\n- تمام پارامترهای آزمایش را استخراج کن\n- مقادیر غیرطبیعی را مشخص کن\n- تحلیل کامل و توضیحات ساده ارائه بده\n- توصیه‌های لازم را بده\n- در انتها هشدار بده که این تحلیل جایگزین نظر پزشک نیست."
+            : "تو یک دکتر متخصص هستی. این تصویر مربوط به یک بیمار است. لطفا تصویر را تحلیل کن و توضیحات پزشکی مفید ارائه بده.";
 
-        const analysis = await analyzeImageWithGemini(photo.file_id, prompt);
-        await sendMessage(chatId, "🔬 تحلیل تصویر:\n\n" + analysis);
-        if (session.labTestMode) session.labTestMode = false;
+          const analysis = await analyzeImageWithGemini(photo.file_id, prompt);
+          await sendMessage(chatId, "🔬 تحلیل تصویر:\n\n" + analysis);
+          if (session.labTestMode) session.labTestMode = false;
+        }
       } catch (error) {
         console.error("Photo error:", error.message);
         await sendMessage(chatId, `❌ خطا در پردازش تصویر: ${error.message}`);
@@ -318,25 +384,21 @@ module.exports = async (req, res) => {
         );
       } else if (session.labTestMode) {
         try {
-          const labPrompt = `تو یک دکتر متخصص آزمایشگاه هستی. نتایج آزمایش را تحلیل کن، مقادیر غیرطبیعی را مشخص کن، توضیح ساده بده و توصیه‌های لازم را ارائه کن.\n\nنتایج: ${userMessage}`;
-          const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: labPrompt }] }],
-              generationConfig: {
-                temperature: 0.7,
-                topK: 40,
-                topP: 0.95,
-                maxOutputTokens: 8000,
+          const data = await gateway({
+            model: "google/gemini-2.5-flash",
+            messages: [
+              {
+                role: "system",
+                content:
+                  "تو یک دکتر متخصص آزمایشگاه هستی. نتایج آزمایش را تحلیل کن، مقادیر غیرطبیعی را مشخص کن، توضیح ساده بده و توصیه‌های لازم را ارائه کن.",
               },
-            }),
+              { role: "user", content: `نتایج: ${userMessage}` },
+            ],
           });
-          const data = await response.json();
-          if (data.candidates?.[0]?.content) {
+          if (data.choices?.[0]?.message?.content) {
             await sendMessage(
               chatId,
-              "🔬 تحلیل آزمایش:\n\n" + data.candidates[0].content.parts[0].text,
+              "🔬 تحلیل آزمایش:\n\n" + data.choices[0].message.content.trim(),
             );
             session.labTestMode = false;
           } else {
