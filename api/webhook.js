@@ -1,9 +1,11 @@
 const fetch = require("node-fetch");
 
 const BALE_TOKEN = process.env.BALE_TOKEN;
-const LOVABLE_API_KEY = process.env.LOVABLE_API_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const BALE_API = `https://tapi.bale.ai/bot${BALE_TOKEN}`;
-const GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
+
+const GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 const userSessions = new Map();
 
@@ -118,28 +120,6 @@ function clearSession(chatId) {
   userSessions.delete(chatId);
 }
 
-// ---------- Gateway helper ----------
-async function gateway(body) {
-  if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
-  const res = await fetch(GATEWAY, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${LOVABLE_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const t = await res.text();
-    if (res.status === 429)
-      throw new Error("سرویس شلوغه. چند لحظه دیگه امتحان کن.");
-    if (res.status === 402)
-      throw new Error("اعتبار سرویس تموم شده. لطفاً به ادمین اطلاع بده.");
-    throw new Error(`AI gateway ${res.status}: ${t.slice(0, 300)}`);
-  }
-  return res.json();
-}
-
 // ---------- AI text ----------
 async function getGeminiResponse(chatId, userMessage) {
   try {
@@ -163,13 +143,28 @@ async function getGeminiResponse(chatId, userMessage) {
 
 ${conversationHistory ? "تاریخچه مکالمه:\n" + conversationHistory + "\n\n" : ""}پیام جدید بیمار: ${userMessage}`;
 
-    const data = await gateway({
-      model: "google/gemini-2.5-flash",
-      messages: [{ role: "system", content: systemPrompt }],
+    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: systemPrompt }] }],
+        generationConfig: {
+          temperature: 0.7,
+          topK: 40,
+          topP: 0.95,
+          maxOutputTokens: 8000,
+        },
+      }),
     });
 
-    if (data.choices?.[0]?.message?.content) {
-      const aiResponse = data.choices[0].message.content.trim();
+    const data = await response.json();
+    if (!response.ok) {
+      console.error("Gemini text error:", JSON.stringify(data));
+      return `خطا: ${data.error?.message || "مشکل در ارتباط با Gemini"}`;
+    }
+
+    if (data.candidates?.[0]?.content) {
+      const aiResponse = data.candidates[0].content.parts[0].text;
       session.history.push({ role: "user", content: userMessage });
       session.history.push({ role: "assistant", content: aiResponse });
       if (session.history.length > 20)
@@ -192,27 +187,37 @@ async function analyzeImageWithGemini(fileId, prompt) {
 
   console.log(`Image ready: ${bytes.length} bytes, mime: ${mime}`);
 
-  const data = await gateway({
-    model: "google/gemini-2.5-flash",
-    messages: [
-      {
-        role: "system",
-        content: prompt,
+  const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [
+        {
+          parts: [
+            { text: prompt },
+            { inline_data: { mime_type: mime, data: b64 } },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.7,
+        topK: 40,
+        topP: 0.95,
+        maxOutputTokens: 8000,
       },
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "لطفاً این تصویر را تحلیل کن." },
-          { type: "image_url", image_url: { url: `data:${mime};base64,${b64}` } },
-        ],
-      },
-    ],
+    }),
   });
 
-  if (data.choices?.[0]?.message?.content) {
-    return data.choices[0].message.content.trim();
+  const data = await response.json();
+  if (!response.ok) {
+    console.error("Gemini vision error:", JSON.stringify(data));
+    throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
   }
-  throw new Error("پاسخی از AI دریافت نشد");
+
+  if (data.candidates?.[0]?.content) {
+    return data.candidates[0].content.parts[0].text;
+  }
+  throw new Error("پاسخی از Gemini دریافت نشد");
 }
 
 // ---------- Lab test analysis ----------
@@ -221,34 +226,52 @@ async function analyzeLabTestImage(fileId) {
   const mime = guessMime(path, ct);
   const b64 = toBase64(bytes);
 
-  const data = await gateway({
-    model: "google/gemini-2.5-pro",
-    messages: [
-      {
-        role: "system",
-        content:
-          "تو یک دستیار پزشکی هستی که نتایج آزمایش‌های پزشکی (خون، ادرار، بیوشیمی، هورمونی و …) را به زبان فارسی روان تحلیل می‌کنی.\n" +
-          "از روی تصویرِ برگه‌ی آزمایش:\n" +
-          "۱) نام آزمایش/پروفایل را بنویس.\n" +
-          "۲) جدولی از هر شاخص بساز با ستون‌های: نام شاخص | مقدار بیمار | محدوده‌ی مرجع | وضعیت (طبیعی/بالا/پایین).\n" +
-          "۳) برای هر مقدار غیرطبیعی، توضیح کوتاه و قابل فهم بده که این یعنی چه و معمولاً به چه دلایلی رخ می‌دهد.\n" +
-          "۴) یک «جمع‌بندی کلی» در ۳–۵ خط بنویس.\n" +
-          "۵) در صورت لزوم، «پیشنهاد گام بعدی» (مثل تکرار آزمایش، مراجعه به متخصص خاص، تغییر سبک زندگی) اضافه کن.\n" +
-          "۶) در انتها این هشدار را بیاور: «این تحلیل صرفاً جنبه‌ی آموزشی دارد و جایگزین نظر پزشک نیست.»\n" +
-          "اگر تصویر برگه‌ی آزمایش نیست یا کیفیتش پایین است، صادقانه بگو و راهنمایی کن دوباره با کیفیت بهتر بفرستد.\n" +
-          "فقط فارسی بنویس و از Markdown ساده استفاده کن.",
+  console.log(`Lab test image ready: ${bytes.length} bytes, mime: ${mime}`);
+
+  const prompt = `تو یک دستیار پزشکی هستی که نتایج آزمایش‌های پزشکی (خون، ادرار، بیوشیمی، هورمونی و …) را به زبان فارسی روان تحلیل می‌کنی.
+
+از روی تصویرِ برگه‌ی آزمایش:
+۱) نام آزمایش/پروفایل را بنویس.
+۲) جدولی از هر شاخص بساز با ستون‌های: نام شاخص | مقدار بیمار | محدوده‌ی مرجع | وضعیت (طبیعی/بالا/پایین).
+۳) برای هر مقدار غیرطبیعی، توضیح کوتاه و قابل فهم بده که این یعنی چه و معمولاً به چه دلایلی رخ می‌دهد.
+۴) یک «جمع‌بندی کلی» در ۳–۵ خط بنویس.
+۵) در صورت لزوم، «پیشنهاد گام بعدی» (مثل تکرار آزمایش، مراجعه به متخصص خاص، تغییر سبک زندگی) اضافه کن.
+۶) در انتها این هشدار را بیاور: «⚠️ این تحلیل صرفاً جنبه‌ی آموزشی دارد و جایگزین نظر پزشک نیست.»
+
+اگر تصویر برگه‌ی آزمایش نیست یا کیفیتش پایین است، صادقانه بگو و راهنمایی کن دوباره با کیفیت بهتر بفرستد.
+فقط فارسی بنویس و از Markdown ساده استفاده کن.`;
+
+  const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [
+        {
+          parts: [
+            { text: prompt },
+            { inline_data: { mime_type: mime, data: b64 } },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.4,
+        topK: 40,
+        topP: 0.95,
+        maxOutputTokens: 8000,
       },
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "لطفاً این برگه‌ی آزمایش را به‌صورت کامل تحلیل کن." },
-          { type: "image_url", image_url: { url: `data:${mime};base64,${b64}` } },
-        ],
-      },
-    ],
+    }),
   });
 
-  return data.choices?.[0]?.message?.content?.trim() ?? "";
+  const data = await response.json();
+  if (!response.ok) {
+    console.error("Lab test analysis error:", JSON.stringify(data));
+    throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
+  }
+
+  if (data.candidates?.[0]?.content) {
+    return data.candidates[0].content.parts[0].text;
+  }
+  throw new Error("پاسخی از Gemini دریافت نشد");
 }
 
 function wantsAnalysis(caption) {
