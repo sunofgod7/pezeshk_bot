@@ -174,39 +174,62 @@ async function getGeminiResponse(chatId, userMessage) {
 
 ${conversationHistory ? "تاریخچه مکالمه:\n" + conversationHistory + "\n\n" : ""}پیام جدید بیمار: ${userMessage}`;
 
-    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: systemPrompt }] }],
-        generationConfig: {
-          temperature: 0.7,
-          topK: 40,
-          topP: 0.95,
-          maxOutputTokens: 5000,
-        },
-      }),
+    return await retryWithBackoff(async () => {
+      const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: systemPrompt }] }],
+          generationConfig: {
+            temperature: 0.7,
+            topK: 40,
+            topP: 0.95,
+            maxOutputTokens: 5000,
+          },
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        console.error("Gemini text error:", JSON.stringify(data));
+        throw new Error(data.error?.message || "مشکل در ارتباط با Gemini");
+      }
+
+      if (data.candidates?.[0]?.content) {
+        const aiResponse = data.candidates[0].content.parts[0].text;
+        session.history.push({ role: "user", content: userMessage });
+        session.history.push({ role: "assistant", content: aiResponse });
+        if (session.history.length > 20)
+          session.history = session.history.slice(-20);
+        return aiResponse;
+      }
+
+      throw new Error("متاسفم، در حال حاضر نمی‌توانم پاسخ دهم.");
     });
-
-    const data = await response.json();
-    if (!response.ok) {
-      console.error("Gemini text error:", JSON.stringify(data));
-      return `خطا: ${data.error?.message || "مشکل در ارتباط با Gemini"}`;
-    }
-
-    if (data.candidates?.[0]?.content) {
-      const aiResponse = data.candidates[0].content.parts[0].text;
-      session.history.push({ role: "user", content: userMessage });
-      session.history.push({ role: "assistant", content: aiResponse });
-      if (session.history.length > 20)
-        session.history = session.history.slice(-20);
-      return aiResponse;
-    }
-
-    return "متاسفم، در حال حاضر نمی‌توانم پاسخ دهم.";
   } catch (error) {
     console.error("AI text error:", error.message);
     return `خطا: ${error.message}`;
+  }
+}
+
+// ---------- Retry helper ----------
+async function retryWithBackoff(fn, maxRetries = 3, initialDelay = 2000) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (error) {
+      const isHighDemand = error.message?.includes("high demand") || 
+                          error.message?.includes("experiencing high demand") ||
+                          error.message?.includes("RESOURCE_EXHAUSTED");
+      
+      if (!isHighDemand || i === maxRetries - 1) {
+        throw error;
+      }
+      
+      const delay = initialDelay * Math.pow(2, i);
+      console.log(`[Retry] Attempt ${i + 1} failed, retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
 }
 
@@ -218,37 +241,39 @@ async function analyzeImageWithGemini(fileId, prompt) {
 
   console.log(`Image ready: ${bytes.length} bytes, mime: ${mime}`);
 
-  const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [
-        {
-          parts: [
-            { text: prompt },
-            { inline_data: { mime_type: mime, data: b64 } },
-          ],
+  return await retryWithBackoff(async () => {
+    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: prompt },
+              { inline_data: { mime_type: mime, data: b64 } },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.7,
+          topK: 40,
+          topP: 0.95,
+          maxOutputTokens: 5000,
         },
-      ],
-      generationConfig: {
-        temperature: 0.7,
-        topK: 40,
-        topP: 0.95,
-        maxOutputTokens: 5000,
-      },
-    }),
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      console.error("Gemini vision error:", JSON.stringify(data));
+      throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
+    }
+
+    if (data.candidates?.[0]?.content) {
+      return data.candidates[0].content.parts[0].text;
+    }
+    throw new Error("پاسخی از Gemini دریافت نشد");
   });
-
-  const data = await response.json();
-  if (!response.ok) {
-    console.error("Gemini vision error:", JSON.stringify(data));
-    throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
-  }
-
-  if (data.candidates?.[0]?.content) {
-    return data.candidates[0].content.parts[0].text;
-  }
-  throw new Error("پاسخی از Gemini دریافت نشد");
 }
 
 // ---------- Lab test analysis ----------
@@ -275,44 +300,46 @@ async function analyzeLabTestImage(fileId) {
 اگر تصویر برگه‌ی آزمایش نیست یا کیفیتش پایین است، صادقانه بگو و راهنمایی کن دوباره با کیفیت بهتر بفرستد.
 فقط فارسی بنویس و از Markdown ساده استفاده کن.`;
 
-    console.log("[analyzeLabTestImage] Calling Gemini API...");
-    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: prompt },
-              { inline_data: { mime_type: mime, data: b64 } },
-            ],
+    console.log("[analyzeLabTestImage] Calling Gemini API with retry...");
+    return await retryWithBackoff(async () => {
+      const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: prompt },
+                { inline_data: { mime_type: mime, data: b64 } },
+              ],
+            },
+          ],
+          generationConfig: {
+            temperature: 0.5,
+            topK: 32,
+            topP: 0.9,
+            maxOutputTokens: 5000,
           },
-        ],
-        generationConfig: {
-          temperature: 0.5,
-          topK: 32,
-          topP: 0.9,
-          maxOutputTokens: 5000,
-        },
-      }),
+        }),
+      });
+
+      console.log(`[analyzeLabTestImage] Gemini response status: ${response.status}`);
+      const data = await response.json();
+      
+      if (!response.ok) {
+        console.error("[analyzeLabTestImage] Gemini error:", JSON.stringify(data));
+        throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
+      }
+
+      if (data.candidates?.[0]?.content) {
+        const result = data.candidates[0].content.parts[0].text;
+        console.log(`[analyzeLabTestImage] Success, result length: ${result.length}`);
+        return result;
+      }
+      
+      console.error("[analyzeLabTestImage] No content in response:", JSON.stringify(data));
+      throw new Error("پاسخی از Gemini دریافت نشد");
     });
-
-    console.log(`[analyzeLabTestImage] Gemini response status: ${response.status}`);
-    const data = await response.json();
-    
-    if (!response.ok) {
-      console.error("[analyzeLabTestImage] Gemini error:", JSON.stringify(data));
-      throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
-    }
-
-    if (data.candidates?.[0]?.content) {
-      const result = data.candidates[0].content.parts[0].text;
-      console.log(`[analyzeLabTestImage] Success, result length: ${result.length}`);
-      return result;
-    }
-    
-    console.error("[analyzeLabTestImage] No content in response:", JSON.stringify(data));
-    throw new Error("پاسخی از Gemini دریافت نشد");
   } catch (error) {
     console.error("[analyzeLabTestImage] Exception:", error.message, error.stack);
     throw error;
@@ -462,44 +489,41 @@ module.exports = async (req, res) => {
         );
       } else if (session.labTestMode) {
         try {
-          const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [
-                {
-                  parts: [
-                    {
-                      text: `تو یک دکتر متخصص آزمایشگاه هستی. نتایج آزمایش را تحلیل کن، مقادیر غیرطبیعی را مشخص کن، توضیح ساده بده و توصیه‌های لازم را ارائه کن.\n\nنتایج: ${userMessage}`,
-                    },
-                  ],
+          const result = await retryWithBackoff(async () => {
+            const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [
+                  {
+                    parts: [
+                      {
+                        text: `تو یک دکتر متخصص آزمایشگاه هستی. نتایج آزمایش را تحلیل کن، مقادیر غیرطبیعی را مشخص کن، توضیح ساده بده و توصیه‌های لازم را ارائه کن.\n\nنتایج: ${userMessage}`,
+                      },
+                    ],
+                  },
+                ],
+                generationConfig: {
+                  temperature: 0.7,
+                  topK: 32,
+                  topP: 0.9,
+                  maxOutputTokens: 5000,
                 },
-              ],
-              generationConfig: {
-                temperature: 0.7,
-                topK: 32,
-                topP: 0.9,
-                maxOutputTokens: 5000,
-              },
-            }),
+              }),
+            });
+            const data = await response.json();
+            if (!response.ok) {
+              console.error("Lab test text error:", JSON.stringify(data));
+              throw new Error(data.error?.message || "مشکل در تحلیل");
+            }
+            if (data.candidates?.[0]?.content) {
+              return data.candidates[0].content.parts[0].text;
+            }
+            throw new Error("متاسفم، نتوانستم آزمایش را تحلیل کنم");
           });
-          const data = await response.json();
-          if (!response.ok) {
-            console.error("Lab test text error:", JSON.stringify(data));
-            await sendMessage(
-              chatId,
-              `خطا: ${data.error?.message || "مشکل در تحلیل"}`,
-            );
-          } else if (data.candidates?.[0]?.content) {
-            await sendMessage(
-              chatId,
-              "🔬 تحلیل آزمایش:\n\n" +
-                data.candidates[0].content.parts[0].text,
-            );
-            session.labTestMode = false;
-          } else {
-            await sendMessage(chatId, "متاسفم، نتوانستم آزمایش را تحلیل کنم");
-          }
+          
+          await sendMessage(chatId, "🔬 تحلیل آزمایش:\n\n" + result);
+          session.labTestMode = false;
         } catch (e) {
           console.error("Lab test text exception:", e);
           await sendMessage(chatId, `خطا: ${e.message}`);
