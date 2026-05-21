@@ -11,12 +11,20 @@ const userSessions = new Map();
 
 // ---------- helpers ----------
 function toBase64(buf) {
-  let binary = "";
-  const CHUNK = 0x8000;
-  for (let i = 0; i < buf.length; i += CHUNK) {
-    binary += String.fromCharCode.apply(null, buf.subarray(i, i + CHUNK));
+  try {
+    console.log(`[toBase64] Starting conversion for ${buf.length} bytes`);
+    let binary = "";
+    const CHUNK = 0x8000;
+    for (let i = 0; i < buf.length; i += CHUNK) {
+      binary += String.fromCharCode.apply(null, buf.subarray(i, i + CHUNK));
+    }
+    const result = Buffer.from(binary, "binary").toString("base64");
+    console.log(`[toBase64] Conversion complete, base64 length: ${result.length}`);
+    return result;
+  } catch (error) {
+    console.error(`[toBase64] Exception:`, error.message);
+    throw error;
   }
-  return Buffer.from(binary, "binary").toString("base64");
 }
 
 function guessMime(path, current) {
@@ -36,28 +44,51 @@ function guessMime(path, current) {
 }
 
 async function getFileBytes(fileId) {
-  const fileRes = await fetch(`${BALE_API}/getFile?file_id=${fileId}`);
-  const fileText = await fileRes.text();
-  let fileJson;
   try {
-    fileJson = JSON.parse(fileText);
-  } catch {
-    throw new Error(`getFile non-JSON: ${fileText.slice(0, 200)}`);
+    console.log(`[getFileBytes] Starting for fileId: ${fileId}`);
+    const fileRes = await fetch(`${BALE_API}/getFile?file_id=${fileId}`);
+    console.log(`[getFileBytes] getFile response status: ${fileRes.status}`);
+    
+    const fileText = await fileRes.text();
+    console.log(`[getFileBytes] getFile response length: ${fileText.length}`);
+    
+    let fileJson;
+    try {
+      fileJson = JSON.parse(fileText);
+    } catch {
+      console.error(`[getFileBytes] JSON parse failed: ${fileText.slice(0, 200)}`);
+      throw new Error(`getFile non-JSON: ${fileText.slice(0, 200)}`);
+    }
+
+    const filePath = fileJson?.result?.file_path;
+    if (!filePath) {
+      console.error(`[getFileBytes] No file_path in response: ${fileText.slice(0, 200)}`);
+      throw new Error(`مسیر فایل پیدا نشد: ${fileText.slice(0, 200)}`);
+    }
+
+    console.log(`[getFileBytes] Downloading from path: ${filePath}`);
+    const imgRes = await fetch(
+      `https://tapi.bale.ai/file/bot${BALE_TOKEN}/${filePath}`,
+    );
+    console.log(`[getFileBytes] Download response status: ${imgRes.status}`);
+    
+    if (!imgRes.ok) {
+      console.error(`[getFileBytes] Download failed with status: ${imgRes.status}`);
+      throw new Error(`خطا در دانلود تصویر: ${imgRes.status}`);
+    }
+
+    const arrayBuffer = await imgRes.arrayBuffer();
+    console.log(`[getFileBytes] Downloaded ${arrayBuffer.byteLength} bytes`);
+    
+    const bytes = new Uint8Array(arrayBuffer);
+    const mime = imgRes.headers.get("content-type")?.split(";")[0]?.trim() || "";
+    
+    console.log(`[getFileBytes] Success: ${bytes.length} bytes, mime: ${mime}`);
+    return { bytes, mime, path: filePath };
+  } catch (error) {
+    console.error(`[getFileBytes] Exception:`, error.message, error.stack);
+    throw error;
   }
-
-  const filePath = fileJson?.result?.file_path;
-  if (!filePath)
-    throw new Error(`مسیر فایل پیدا نشد: ${fileText.slice(0, 200)}`);
-
-  const imgRes = await fetch(
-    `https://tapi.bale.ai/file/bot${BALE_TOKEN}/${filePath}`,
-  );
-  if (!imgRes.ok) throw new Error(`خطا در دانلود تصویر: ${imgRes.status}`);
-
-  const arrayBuffer = await imgRes.arrayBuffer();
-  const bytes = new Uint8Array(arrayBuffer);
-  const mime = imgRes.headers.get("content-type")?.split(";")[0]?.trim() || "";
-  return { bytes, mime, path: filePath };
 }
 
 // ---------- Bale sendMessage ----------
