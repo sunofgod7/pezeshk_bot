@@ -37,6 +37,11 @@ function guessMime(path, current) {
       png: "image/png",
       webp: "image/webp",
       gif: "image/gif",
+      ogg: "audio/ogg",
+      oga: "audio/ogg",
+      mp3: "audio/mpeg",
+      wav: "audio/wav",
+      m4a: "audio/mp4",
     };
     mime = (ext && map[ext]) || "image/jpeg";
   }
@@ -151,6 +156,68 @@ function getSession(chatId) {
 
 function clearSession(chatId) {
   userSessions.delete(chatId);
+}
+
+// ---------- Voice to Text ----------
+async function transcribeVoice(fileId) {
+  try {
+    console.log("[transcribeVoice] Starting transcription...");
+    const { bytes, mime: ct, path } = await getFileBytes(fileId);
+    console.log(`[transcribeVoice] File downloaded: ${bytes.length} bytes`);
+    
+    let mime = guessMime(path, ct);
+    // Gemini supports audio formats, ensure proper mime type
+    if (!mime.startsWith("audio/")) {
+      mime = "audio/ogg"; // Default for Bale voice messages
+    }
+    
+    const b64 = toBase64(bytes);
+    console.log(`[transcribeVoice] Base64 encoded, mime: ${mime}`);
+
+    const prompt = "لطفاً این فایل صوتی را به متن فارسی تبدیل کن. فقط متن گفته شده را بنویس، بدون توضیح اضافی.";
+
+    console.log("[transcribeVoice] Calling Gemini API...");
+    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: prompt },
+              { inline_data: { mime_type: mime, data: b64 } },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.1,
+          topK: 20,
+          topP: 0.8,
+          maxOutputTokens: 2000,
+        },
+      }),
+    });
+
+    console.log(`[transcribeVoice] Gemini response status: ${response.status}`);
+    const data = await response.json();
+    
+    if (!response.ok) {
+      console.error("[transcribeVoice] Gemini error:", JSON.stringify(data));
+      throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
+    }
+
+    if (data.candidates?.[0]?.content) {
+      const transcription = data.candidates[0].content.parts[0].text.trim();
+      console.log(`[transcribeVoice] Success, transcription: ${transcription.substring(0, 100)}...`);
+      return transcription;
+    }
+    
+    console.error("[transcribeVoice] No content in response:", JSON.stringify(data));
+    throw new Error("متن صوتی شناسایی نشد");
+  } catch (error) {
+    console.error("[transcribeVoice] Exception:", error.message, error.stack);
+    throw error;
+  }
 }
 
 // ---------- AI text ----------
@@ -784,6 +851,52 @@ module.exports = async (req, res) => {
           console.error("[Photo] General image error:", error.message, error.stack);
           await sendMessage(chatId, `❌ خطا در پردازش تصویر: ${error.message}`);
         }
+      }
+
+      return res.status(200).json({ ok: true });
+    }
+
+    // پیام صوتی (Voice)
+    if (update.message.voice) {
+      console.log("[Voice] Received voice message");
+      
+      if (!session.visitStarted) {
+        console.log("[Voice] Visit not started, asking user to start");
+        await sendMessage(
+          chatId,
+          'لطفا ابتدا "شروع ویزیت" را انتخاب کنید تا بتوانید پیام صوتی ارسال کنید.',
+        );
+        return res.status(200).json({ ok: true });
+      }
+
+      await sendMessage(chatId, "🎤 در حال پردازش پیام صوتی...");
+
+      try {
+        const voice = update.message.voice;
+        console.log(`[Voice] Processing voice, file_id: ${voice.file_id}, duration: ${voice.duration}s`);
+        
+        // تبدیل صدا به متن
+        const transcription = await transcribeVoice(voice.file_id);
+        console.log(`[Voice] Transcription: ${transcription}`);
+        
+        if (!transcription || transcription.length < 3) {
+          await sendMessage(chatId, "❌ متاسفانه نتوانستم صدای شما را تشخیص دهم. لطفا دوباره تلاش کنید یا پیام متنی ارسال کنید.");
+          return res.status(200).json({ ok: true });
+        }
+
+        // نمایش متن شناسایی شده
+        await sendMessage(chatId, `📝 متن شناسایی شده:\n"${transcription}"\n\n⏳ در حال پردازش پاسخ...`);
+        
+        // دریافت پاسخ از AI
+        const geminiResponse = await getGeminiResponse(chatId, transcription);
+        await sendMessage(chatId, geminiResponse);
+        
+      } catch (error) {
+        console.error("[Voice] Error:", error.message, error.stack);
+        await sendMessage(
+          chatId,
+          `❌ خطا در پردازش پیام صوتی: ${error.message}\n\nلطفا دوباره تلاش کنید یا پیام متنی ارسال کنید.`
+        );
       }
 
       return res.status(200).json({ ok: true });
