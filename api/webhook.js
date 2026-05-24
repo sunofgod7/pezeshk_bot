@@ -39,62 +39,87 @@ console.log(`✅ تعداد ${GEMINI_API_KEYS.length} API Key بارگذاری �
 const TEXT_MODELS = ["gemini-3.1-flash-lite"];
 const MEDIA_MODELS = ["gemini-3.5-flash", "gemini-3.0-flash", "gemini-2.5-flash"];
 
+// کش برای ذخیره آخرین کلید و مدل موفق
+const lastSuccessfulConfig = {
+  text: { keyIndex: 0, modelIndex: 0 },
+  media: { keyIndex: 0, modelIndex: 0 }
+};
+
 // تلاش مجدد با کلیدها و مدل‌های مختلف
 async function callGeminiWithRetry(requestBody, isMediaRequest = false) {
   const models = isMediaRequest ? MEDIA_MODELS : TEXT_MODELS;
+  const configType = isMediaRequest ? 'media' : 'text';
+  const lastConfig = lastSuccessfulConfig[configType];
   let lastError = null;
   
-  // برای هر API Key
+  // ابتدا آخرین ترکیب موفق را امتحان کن
+  console.log(`[Gemini] شروع از آخرین ترکیب موفق: کلید ${lastConfig.keyIndex + 1}, مدل ${lastConfig.modelIndex + 1}`);
+  
+  // لیست تمام ترکیب‌های ممکن با شروع از آخرین موفق
+  const attempts = [];
   for (let keyIndex = 0; keyIndex < GEMINI_API_KEYS.length; keyIndex++) {
-    const apiKeyObj = GEMINI_API_KEYS[keyIndex];
-    
-    // برای هر مدل
     for (let modelIndex = 0; modelIndex < models.length; modelIndex++) {
-      const model = models[modelIndex];
+      attempts.push({ keyIndex, modelIndex });
+    }
+  }
+  
+  // مرتب‌سازی: آخرین موفق اول، بقیه به ترتیب
+  attempts.sort((a, b) => {
+    if (a.keyIndex === lastConfig.keyIndex && a.modelIndex === lastConfig.modelIndex) return -1;
+    if (b.keyIndex === lastConfig.keyIndex && b.modelIndex === lastConfig.modelIndex) return 1;
+    if (a.keyIndex !== b.keyIndex) return a.keyIndex - b.keyIndex;
+    return a.modelIndex - b.modelIndex;
+  });
+  
+  // امتحان تمام ترکیب‌ها
+  for (const { keyIndex, modelIndex } of attempts) {
+    const apiKeyObj = GEMINI_API_KEYS[keyIndex];
+    const model = models[modelIndex];
+    
+    try {
+      const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKeyObj.key}`;
       
-      try {
-        const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKeyObj.key}`;
-        
-        console.log(`[Gemini] کلید ${apiKeyObj.index}, مدل ${model} (${keyIndex + 1}/${GEMINI_API_KEYS.length}, ${modelIndex + 1}/${models.length})`);
-        
-        const response = await fetch(GEMINI_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(requestBody),
-        });
+      console.log(`[Gemini] کلید ${apiKeyObj.index}, مدل ${model} (کلید ${keyIndex + 1}/${GEMINI_API_KEYS.length}, مدل ${modelIndex + 1}/${models.length})`);
+      
+      const response = await fetch(GEMINI_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
 
-        const data = await response.json();
+      const data = await response.json();
+      
+      // بررسی خطای Quota
+      if (!response.ok) {
+        const errorMsg = data.error?.message || "";
         
-        // بررسی خطای Quota
-        if (!response.ok) {
-          const errorMsg = data.error?.message || "";
-          
-          // اگر خطای Quota بود، مدل بعدی را امتحان کن
-          if (
-            errorMsg.includes("quota") ||
-            errorMsg.includes("Quota exceeded") ||
-            errorMsg.includes("rate limit") ||
-            response.status === 429
-          ) {
-            console.log(`⚠️ کلید ${apiKeyObj.index} با مدل ${model} به Quota خورد`);
-            apiKeyObj.failCount++;
-            apiKeyObj.lastFailTime = Date.now();
-            lastError = new Error(errorMsg);
-            continue; // امتحان مدل بعدی
-          }
-          
-          // خطاهای دیگر را مستقیماً برگردان
-          throw new Error(errorMsg || `خطای Gemini: ${response.status}`);
+        // اگر خطای Quota بود، مدل بعدی را امتحان کن
+        if (
+          errorMsg.includes("quota") ||
+          errorMsg.includes("Quota exceeded") ||
+          errorMsg.includes("rate limit") ||
+          response.status === 429
+        ) {
+          console.log(`⚠️ کلید ${apiKeyObj.index} با مدل ${model} به Quota خورد`);
+          apiKeyObj.failCount++;
+          apiKeyObj.lastFailTime = Date.now();
+          lastError = new Error(errorMsg);
+          continue; // امتحان ترکیب بعدی
         }
-
-        // موفقیت
-        console.log(`✅ درخواست با کلید ${apiKeyObj.index} و مدل ${model} موفق بود`);
-        return data;
         
-      } catch (error) {
-        console.error(`❌ خطا با کلید ${apiKeyObj.index} و مدل ${model}:`, error.message);
-        lastError = error;
+        // خطاهای دیگر را مستقیماً برگردان
+        throw new Error(errorMsg || `خطای Gemini: ${response.status}`);
       }
+
+      // موفقیت - ذخیره ترکیب موفق
+      console.log(`✅ درخواست با کلید ${apiKeyObj.index} و مدل ${model} موفق بود`);
+      lastSuccessfulConfig[configType] = { keyIndex, modelIndex };
+      console.log(`💾 ترکیب موفق ذخیره شد: ${configType} → کلید ${keyIndex + 1}, مدل ${modelIndex + 1}`);
+      return data;
+      
+    } catch (error) {
+      console.error(`❌ خطا با کلید ${apiKeyObj.index} و مدل ${model}:`, error.message);
+      lastError = error;
     }
   }
   
