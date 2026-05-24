@@ -1,6 +1,10 @@
 const fetch = require("node-fetch");
+const dns = require('dns').promises;
 
 const BALE_TOKEN = process.env.BALE_TOKEN;
+
+// تنظیم DNS برای بهبود اتصال
+dns.setServers(['8.8.8.8', '1.1.1.1', '178.22.122.100', '185.51.200.2']);
 
 // ---------- API Key Management ----------
 // جمع‌آوری تمام API Keyها از environment variables
@@ -189,21 +193,26 @@ function guessMime(path, current) {
 }
 
 async function getFileBytes(fileId) {
-  const MAX_RETRIES = 3;
-  const TIMEOUT = 30000;
+  const MAX_RETRIES = 5;
+  const TIMEOUT = 60000;
   
   async function fetchWithRetry(url, retries = 0) {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), TIMEOUT);
       
-      const response = await fetch(url, { signal: controller.signal });
+      const response = await fetch(url, { 
+        signal: controller.signal,
+        timeout: TIMEOUT,
+        headers: { "Connection": "keep-alive" }
+      });
       clearTimeout(timeoutId);
       return response;
     } catch (error) {
       if (retries < MAX_RETRIES) {
-        console.log(`⚠️ Retry ${retries + 1}/${MAX_RETRIES} for fetch...`);
-        await new Promise(r => setTimeout(r, 2000 * (retries + 1)));
+        const waitTime = Math.min(5000 * Math.pow(2, retries), 30000);
+        console.log(`⚠️ Retry ${retries + 1}/${MAX_RETRIES} for fetch (waiting ${waitTime}ms)...`);
+        await new Promise(r => setTimeout(r, waitTime));
         return fetchWithRetry(url, retries + 1);
       }
       throw error;
@@ -260,8 +269,8 @@ async function getFileBytes(fileId) {
 // ---------- Bale sendMessage ----------
 async function sendMessage(chatId, text, replyMarkup = null) {
   const MAX_LENGTH = 3500;
-  const MAX_RETRIES = 3;
-  const TIMEOUT = 30000; // 30 seconds
+  const MAX_RETRIES = 5; // افزایش به 5
+  const TIMEOUT = 60000; // افزایش به 60 ثانیه
 
   async function sendWithRetry(body, retries = 0) {
     try {
@@ -270,17 +279,22 @@ async function sendMessage(chatId, text, replyMarkup = null) {
       
       const res = await fetch(`${BALE_API}/sendMessage`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "Connection": "keep-alive"
+        },
         body: JSON.stringify(body),
         signal: controller.signal,
+        timeout: TIMEOUT,
       });
       
       clearTimeout(timeoutId);
       return res.json();
     } catch (error) {
       if (retries < MAX_RETRIES) {
-        console.log(`⚠️ Retry ${retries + 1}/${MAX_RETRIES} for sendMessage...`);
-        await new Promise(r => setTimeout(r, 2000 * (retries + 1))); // exponential backoff
+        const waitTime = Math.min(5000 * Math.pow(2, retries), 30000); // max 30 sec
+        console.log(`⚠️ Retry ${retries + 1}/${MAX_RETRIES} for sendMessage (waiting ${waitTime}ms)...`);
+        await new Promise(r => setTimeout(r, waitTime));
         return sendWithRetry(body, retries + 1);
       }
       throw error;
@@ -770,7 +784,7 @@ module.exports = async (req, res) => {
     // Helper function to send message with error handling
     async function safeSendMessage(chatId, text, replyMarkup = null) {
       try {
-        return await sendMessage(chatId, text, replyMarkup);
+        return await safeSendMessage(chatId, text, replyMarkup);
       } catch (error) {
         console.error(`[safeSendMessage] Failed to send message to ${chatId}: ${error.message}`);
         console.error(`[safeSendMessage] Error type: ${error.code || error.type || 'unknown'}`);
@@ -780,6 +794,14 @@ module.exports = async (req, res) => {
     }
 
     console.log(`[Webhook] Received message from chat ${chatId}`);
+    
+    if (update.message.text) {
+      console.log(`[Webhook] Text message: "${update.message.text}"`);
+    } else if (update.message.photo) {
+      console.log(`[Webhook] Photo message`);
+    } else if (update.message.voice) {
+      console.log(`[Webhook] Voice message`);
+    }
 
     // عکس
     if (update.message.photo) {
@@ -787,7 +809,7 @@ module.exports = async (req, res) => {
       
       if (!session.visitStarted) {
         console.log("[Photo] Visit not started, asking user to start");
-        await sendMessage(
+        await safeSendMessage(
           chatId,
           'لطفا ابتدا "شروع ویزیت"، "تحلیل آزمایش"، "تحلیل دارو" یا "تحلیل MRI" را انتخاب کنید.',
         );
@@ -803,7 +825,7 @@ module.exports = async (req, res) => {
 
       // تشخیص خودکار بر اساس حالت فعلی
       if (session.mriMode || analyzeMRI) {
-        await sendMessage(
+        await safeSendMessage(
           chatId,
           "در حال تحلیل تصویر رادیولوژی… 🔬⏳ (ممکنه چند ثانیه طول بکشه)",
         );
@@ -814,14 +836,14 @@ module.exports = async (req, res) => {
           
           const analysis = await analyzeMRIImage(photo.file_id);
           console.log(`[Photo] MRI analysis complete, length: ${analysis.length}`);
-          await sendMessage(chatId, "🔬 تحلیل تصویر رادیولوژی:\n\n" + analysis);
+          await safeSendMessage(chatId, "🔬 تحلیل تصویر رادیولوژی:\n\n" + analysis);
           if (session.mriMode) session.mriMode = false;
         } catch (error) {
           console.error("[Photo] MRI error:", error.message, error.stack);
-          await sendMessage(chatId, `❌ خطا در تحلیل تصویر: ${error.message}`);
+          await safeSendMessage(chatId, `❌ خطا در تحلیل تصویر: ${error.message}`);
         }
       } else if (session.medicineMode || analyzeMedicine) {
-        await sendMessage(
+        await safeSendMessage(
           chatId,
           "در حال تحلیل داروها… 💊⏳ (ممکنه چند ثانیه طول بکشه)",
         );
@@ -832,14 +854,14 @@ module.exports = async (req, res) => {
           
           const analysis = await analyzeMedicineImage(photo.file_id);
           console.log(`[Photo] Medicine analysis complete, length: ${analysis.length}`);
-          await sendMessage(chatId, "💊 تحلیل داروها:\n\n" + analysis);
+          await safeSendMessage(chatId, "💊 تحلیل داروها:\n\n" + analysis);
           if (session.medicineMode) session.medicineMode = false;
         } catch (error) {
           console.error("[Photo] Medicine error:", error.message, error.stack);
-          await sendMessage(chatId, `❌ خطا در تحلیل دارو: ${error.message}`);
+          await safeSendMessage(chatId, `❌ خطا در تحلیل دارو: ${error.message}`);
         }
       } else if (session.labTestMode || analyzeTest) {
-        await sendMessage(
+        await safeSendMessage(
           chatId,
           "در حال تحلیل برگه‌ی آزمایش… 🧪⏳ (ممکنه چند ثانیه طول بکشه)",
         );
@@ -850,14 +872,14 @@ module.exports = async (req, res) => {
 
           const analysis = await analyzeLabTestImage(photo.file_id);
           console.log(`[Photo] Lab analysis complete, length: ${analysis.length}`);
-          await sendMessage(chatId, "🔬 تحلیل آزمایش:\n\n" + analysis);
+          await safeSendMessage(chatId, "🔬 تحلیل آزمایش:\n\n" + analysis);
           if (session.labTestMode) session.labTestMode = false;
         } catch (error) {
           console.error("[Photo] Lab test error:", error.message, error.stack);
-          await sendMessage(chatId, `❌ خطا در تحلیل آزمایش: ${error.message}`);
+          await safeSendMessage(chatId, `❌ خطا در تحلیل آزمایش: ${error.message}`);
         }
       } else {
-        await sendMessage(chatId, "⏳ در حال پردازش و تحلیل تصویر...");
+        await safeSendMessage(chatId, "⏳ در حال پردازش و تحلیل تصویر...");
         
         try {
           const photo = update.message.photo[update.message.photo.length - 1];
@@ -866,10 +888,10 @@ module.exports = async (req, res) => {
           const prompt = "تو یک دکتر متخصص هستی. این تصویر مربوط به یک بیمار است. لطفا تصویر را تحلیل کن و توضیحات پزشکی مفید ارائه بده.";
           const analysis = await analyzeImageWithGemini(photo.file_id, prompt);
           console.log(`[Photo] General analysis complete, length: ${analysis.length}`);
-          await sendMessage(chatId, "🔬 تحلیل تصویر:\n\n" + analysis);
+          await safeSendMessage(chatId, "🔬 تحلیل تصویر:\n\n" + analysis);
         } catch (error) {
           console.error("[Photo] General image error:", error.message, error.stack);
-          await sendMessage(chatId, `❌ خطا در پردازش تصویر: ${error.message}`);
+          await safeSendMessage(chatId, `❌ خطا در پردازش تصویر: ${error.message}`);
         }
       }
 
@@ -882,14 +904,14 @@ module.exports = async (req, res) => {
       
       if (!session.visitStarted) {
         console.log("[Voice] Visit not started, asking user to start");
-        await sendMessage(
+        await safeSendMessage(
           chatId,
           'لطفا ابتدا "شروع ویزیت" را انتخاب کنید تا بتوانید پیام صوتی ارسال کنید.',
         );
         return res.status(200).json({ ok: true });
       }
 
-      await sendMessage(chatId, "🎤 در حال پردازش پیام صوتی...");
+      await safeSendMessage(chatId, "🎤 در حال پردازش پیام صوتی...");
 
       try {
         const voice = update.message.voice;
@@ -900,20 +922,20 @@ module.exports = async (req, res) => {
         console.log(`[Voice] Transcription: ${transcription}`);
         
         if (!transcription || transcription.length < 3) {
-          await sendMessage(chatId, "❌ متاسفانه نتوانستم صدای شما را تشخیص دهم. لطفا دوباره تلاش کنید یا پیام متنی ارسال کنید.");
+          await safeSendMessage(chatId, "❌ متاسفانه نتوانستم صدای شما را تشخیص دهم. لطفا دوباره تلاش کنید یا پیام متنی ارسال کنید.");
           return res.status(200).json({ ok: true });
         }
 
         // نمایش متن شناسایی شده
-        await sendMessage(chatId, `📝 متن شناسایی شده:\n"${transcription}"\n\n⏳ در حال پردازش پاسخ...`);
+        await safeSendMessage(chatId, `📝 متن شناسایی شده:\n"${transcription}"\n\n⏳ در حال پردازش پاسخ...`);
         
         // دریافت پاسخ از AI
         const geminiResponse = await getGeminiResponse(chatId, transcription);
-        await sendMessage(chatId, geminiResponse);
+        await safeSendMessage(chatId, geminiResponse);
         
       } catch (error) {
         console.error("[Voice] Error:", error.message, error.stack);
-        await sendMessage(
+        await safeSendMessage(
           chatId,
           `❌ خطا در پردازش پیام صوتی: ${error.message}\n\nلطفا دوباره تلاش کنید یا پیام متنی ارسال کنید.`
         );
@@ -931,6 +953,7 @@ module.exports = async (req, res) => {
       userMessage === "شروع ویزیت" ||
       userMessage === "استارت ویزیت"
     ) {
+      console.log(`[Webhook] Processing /start command`);
       clearSession(chatId);
       const s = getSession(chatId);
       s.visitStarted = true;
@@ -942,17 +965,19 @@ module.exports = async (req, res) => {
         ],
         resize_keyboard: true,
       };
-      await sendMessage(
+      console.log(`[Webhook] Sending welcome message...`);
+      await safeSendMessage(
         chatId,
         "👨‍⚕️ سلام، من دکتر هوش مصنوعی شما هستم.\n\nلطفا مشکل یا علائم خود را توضیح دهید.\n\n🔬 می‌توانید نتایج آزمایش را برای تحلیل ارسال کنید.\n💊 می‌توانید داروهای مصرفی خود را برای تحلیل ارسال کنید.\n🩻 می‌توانید تصاویر MRI، CT، رادیوگرافی را برای تحلیل ارسال کنید.\n\n⚠️ توجه: این مشاوره جایگزین ویزیت حضوری نیست.",
         keyboard,
       );
+      console.log(`[Webhook] Message sent`);
     } else if (userMessage === "تحلیل آزمایش") {
       session.visitStarted = true;
       session.labTestMode = true;
       session.medicineMode = false;
       session.mriMode = false;
-      await sendMessage(
+      await safeSendMessage(
         chatId,
         "🔬 لطفا نتایج آزمایش خود را ارسال کنید.\n\nمی‌توانید:\n• عکس آزمایش را ارسال کنید\n• یا نتایج را تایپ کنید",
       );
@@ -961,7 +986,7 @@ module.exports = async (req, res) => {
       session.medicineMode = true;
       session.labTestMode = false;
       session.mriMode = false;
-      await sendMessage(
+      await safeSendMessage(
         chatId,
         "💊 لطفا داروهای مصرفی خود را ارسال کنید.\n\nمی‌توانید:\n• عکس داروها را ارسال کنید\n• یا نام داروها را تایپ کنید\n\nمثال: جنتامایسین، استامینوفن، ایبوپروفن",
       );
@@ -970,13 +995,13 @@ module.exports = async (req, res) => {
       session.mriMode = true;
       session.labTestMode = false;
       session.medicineMode = false;
-      await sendMessage(
+      await safeSendMessage(
         chatId,
         "🩻 لطفا تصویر رادیولوژی خود را ارسال کنید.\n\nانواع تصاویر قابل تحلیل:\n• MRI (ام آر آی)\n• CT Scan (سی تی اسکن)\n• X-Ray (رادیوگرافی)\n• سونوگرافی\n• و سایر تصاویر پزشکی\n\n💡 برای نتیجه بهتر، تصویر با کیفیت بالا ارسال کنید.",
       );
     } else if (userMessage === "پایان ویزیت") {
       clearSession(chatId);
-      await sendMessage(
+      await safeSendMessage(
         chatId,
         "✅ ویزیت به پایان رسید.\n\nامیدوارم حالتان بهتر شود. 🏥 در صورت تشدید علائم، به پزشک مراجعه کنید.",
       );
@@ -992,7 +1017,7 @@ module.exports = async (req, res) => {
         ],
         resize_keyboard: true,
       };
-      await sendMessage(
+      await safeSendMessage(
         chatId,
         "👨‍⚕️ ویزیت جدید شروع شد.\n\nلطفا مشکل یا علائم خود را توضیح دهید.",
         keyboard,
@@ -1007,24 +1032,24 @@ module.exports = async (req, res) => {
           ],
           resize_keyboard: true,
         };
-        await sendMessage(
+        await safeSendMessage(
           chatId,
           "👋 سلام! لطفا یکی از گزینه‌ها را انتخاب کنید:\n\n• شروع ویزیت: مشاوره پزشکی\n• تحلیل آزمایش: تحلیل نتایج آزمایش\n• تحلیل دارو: اطلاعات کامل درباره داروها\n• تحلیل MRI: تحلیل تصاویر رادیولوژی",
           keyboard,
         );
       } else if (session.medicineMode) {
         try {
-          await sendMessage(chatId, "⏳ در حال تحلیل داروها...");
+          await safeSendMessage(chatId, "⏳ در حال تحلیل داروها...");
           const analysis = await analyzeMedicineText(userMessage);
-          await sendMessage(chatId, "💊 تحلیل داروها:\n\n" + analysis);
+          await safeSendMessage(chatId, "💊 تحلیل داروها:\n\n" + analysis);
           session.medicineMode = false;
         } catch (e) {
           console.error("Medicine text exception:", e);
-          await sendMessage(chatId, `خطا: ${e.message}`);
+          await safeSendMessage(chatId, `خطا: ${e.message}`);
         }
       } else if (session.labTestMode) {
         try {
-          await sendMessage(chatId, "⏳ در حال تحلیل نتایج آزمایش...");
+          await safeSendMessage(chatId, "⏳ در حال تحلیل نتایج آزمایش...");
           
           const prompt = `تو یک دکتر متخصص آزمایشگاه هستی. نتایج آزمایش را تحلیل کن، مقادیر غیرطبیعی را مشخص کن، توضیح ساده بده و توصیه‌های لازم را ارائه کن.\n\nنتایج: ${userMessage}`;
           
@@ -1043,22 +1068,22 @@ module.exports = async (req, res) => {
           }, false); // false = text request
           
           if (data.candidates?.[0]?.content) {
-            await sendMessage(
+            await safeSendMessage(
               chatId,
               "🔬 تحلیل آزمایش:\n\n" +
                 data.candidates[0].content.parts[0].text,
             );
             session.labTestMode = false;
           } else {
-            await sendMessage(chatId, "متاسفم، نتوانستم آزمایش را تحلیل کنم");
+            await safeSendMessage(chatId, "متاسفم، نتوانستم آزمایش را تحلیل کنم");
           }
         } catch (e) {
           console.error("Lab test text exception:", e);
-          await sendMessage(chatId, `خطا: ${e.message}`);
+          await safeSendMessage(chatId, `خطا: ${e.message}`);
         }
       } else {
         const geminiResponse = await getGeminiResponse(chatId, userMessage);
-        await sendMessage(chatId, geminiResponse);
+        await safeSendMessage(chatId, geminiResponse);
       }
     }
 
