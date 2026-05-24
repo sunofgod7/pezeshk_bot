@@ -189,9 +189,30 @@ function guessMime(path, current) {
 }
 
 async function getFileBytes(fileId) {
+  const MAX_RETRIES = 3;
+  const TIMEOUT = 30000;
+  
+  async function fetchWithRetry(url, retries = 0) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT);
+      
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      return response;
+    } catch (error) {
+      if (retries < MAX_RETRIES) {
+        console.log(`⚠️ Retry ${retries + 1}/${MAX_RETRIES} for fetch...`);
+        await new Promise(r => setTimeout(r, 2000 * (retries + 1)));
+        return fetchWithRetry(url, retries + 1);
+      }
+      throw error;
+    }
+  }
+  
   try {
     console.log(`[getFileBytes] Starting for fileId: ${fileId}`);
-    const fileRes = await fetch(`${BALE_API}/getFile?file_id=${fileId}`);
+    const fileRes = await fetchWithRetry(`${BALE_API}/getFile?file_id=${fileId}`);
     console.log(`[getFileBytes] getFile response status: ${fileRes.status}`);
     
     const fileText = await fileRes.text();
@@ -212,8 +233,8 @@ async function getFileBytes(fileId) {
     }
 
     console.log(`[getFileBytes] Downloading from path: ${filePath}`);
-    const imgRes = await fetch(
-      `https://tapi.bale.ai/file/bot${BALE_TOKEN}/${filePath}`,
+    const imgRes = await fetchWithRetry(
+      `https://tapi.bale.ai/file/bot${BALE_TOKEN}/${filePath}`
     );
     console.log(`[getFileBytes] Download response status: ${imgRes.status}`);
     
@@ -239,16 +260,37 @@ async function getFileBytes(fileId) {
 // ---------- Bale sendMessage ----------
 async function sendMessage(chatId, text, replyMarkup = null) {
   const MAX_LENGTH = 3500;
+  const MAX_RETRIES = 3;
+  const TIMEOUT = 30000; // 30 seconds
+
+  async function sendWithRetry(body, retries = 0) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT);
+      
+      const res = await fetch(`${BALE_API}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      
+      clearTimeout(timeoutId);
+      return res.json();
+    } catch (error) {
+      if (retries < MAX_RETRIES) {
+        console.log(`⚠️ Retry ${retries + 1}/${MAX_RETRIES} for sendMessage...`);
+        await new Promise(r => setTimeout(r, 2000 * (retries + 1))); // exponential backoff
+        return sendWithRetry(body, retries + 1);
+      }
+      throw error;
+    }
+  }
 
   if (text.length <= MAX_LENGTH) {
     const body = { chat_id: chatId, text };
     if (replyMarkup) body.reply_markup = replyMarkup;
-    const res = await fetch(`${BALE_API}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    return res.json();
+    return sendWithRetry(body);
   }
 
   const parts = [];
@@ -270,11 +312,7 @@ async function sendMessage(chatId, text, replyMarkup = null) {
   for (let i = 0; i < parts.length; i++) {
     const body = { chat_id: chatId, text: parts[i] };
     if (replyMarkup && i === parts.length - 1) body.reply_markup = replyMarkup;
-    await fetch(`${BALE_API}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    await sendWithRetry(body);
     if (i < parts.length - 1) await new Promise((r) => setTimeout(r, 800));
   }
   return { ok: true };
@@ -728,6 +766,17 @@ module.exports = async (req, res) => {
 
     const chatId = update.message.chat.id;
     const session = getSession(chatId);
+
+    // Helper function to send message with error handling
+    async function safeSendMessage(chatId, text, replyMarkup = null) {
+      try {
+        return await sendMessage(chatId, text, replyMarkup);
+      } catch (error) {
+        console.error(`[safeSendMessage] Failed to send message: ${error.message}`);
+        // Don't throw, just log - webhook should always return 200
+        return { ok: false, error: error.message };
+      }
+    }
 
     // عکس
     if (update.message.photo) {
