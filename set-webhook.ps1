@@ -1,6 +1,6 @@
 # جایگزین کردن توکن ربات
-$TOKEN = "1885743172:GGfRnPcEEBMeY04aNy8jZm3MlhpLec23Lr4"
-$WEBHOOK_URL = "https://v0-translator-2wsgt3m63su.vercel.app/webhook"
+$TOKEN = "1885743172:WCYlN8s9X10_bqS3ZUEstmkvQmVGMP_MxW0"
+$WEBHOOK_URL = "https://pezeshkbot-production.up.railway.app/webhook"
 
 $body = @{
     url = $WEBHOOK_URL

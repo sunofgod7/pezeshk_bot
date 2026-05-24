@@ -4,6 +4,8 @@ const webhookHandler = require('./api/webhook');
 const PORT = process.env.PORT || 8080;
 
 const server = http.createServer(async (req, res) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  
   // Health check endpoint
   if (req.url === '/health' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -11,8 +13,8 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Webhook endpoint
-  if (req.url === '/api/webhook' && req.method === 'POST') {
+  // Webhook endpoint - support both /webhook and /api/webhook
+  if ((req.url === '/webhook' || req.url === '/api/webhook') && req.method === 'POST') {
     let body = '';
     
     req.on('data', chunk => {
