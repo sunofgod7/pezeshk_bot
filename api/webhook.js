@@ -264,13 +264,16 @@ async function getFileBytes(fileId) {
 async function sendMessage(chatId, text, replyMarkup = null) {
   const MAX_LENGTH = 3500;
   const MAX_RETRIES = 3;
-  const TIMEOUT = 15000; // 15 seconds
+  const TIMEOUT = 30000; // 30 seconds
 
   async function sendWithRetry(body, retries = 0) {
     try {
-      console.log(`[sendMessage] Attempt ${retries + 1}/${MAX_RETRIES} - Connecting to Bale API`);
+      console.log(`[sendMessage] Attempt ${retries + 1}/${MAX_RETRIES}`);
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT);
+      const timeoutId = setTimeout(() => {
+        console.log(`[sendMessage] Timeout after ${TIMEOUT}ms, aborting...`);
+        controller.abort();
+      }, TIMEOUT);
       
       const res = await fetch(`${BALE_API}/sendMessage`, {
         method: "POST",
@@ -282,17 +285,17 @@ async function sendMessage(chatId, text, replyMarkup = null) {
       });
       
       clearTimeout(timeoutId);
-      console.log(`[sendMessage] Response received with status: ${res.status}`);
+      console.log(`[sendMessage] ✅ Success! Status: ${res.status}`);
       return res.json();
     } catch (error) {
-      console.error(`[sendMessage] Error on attempt ${retries + 1}: ${error.message}`);
+      console.error(`[sendMessage] ❌ Error: ${error.message}`);
       if (retries < MAX_RETRIES) {
-        const waitTime = 2000 * (retries + 1);
-        console.log(`⚠️ Retry ${retries + 1}/${MAX_RETRIES} for sendMessage (waiting ${waitTime}ms)...`);
+        const waitTime = 3000;
+        console.log(`⚠️ Retry ${retries + 1}/${MAX_RETRIES} (waiting ${waitTime}ms)...`);
         await new Promise(r => setTimeout(r, waitTime));
         return sendWithRetry(body, retries + 1);
       }
-      console.error(`[sendMessage] All ${MAX_RETRIES} attempts failed`);
+      console.error(`[sendMessage] 💀 All attempts failed`);
       throw error;
     }
   }
