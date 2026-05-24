@@ -274,6 +274,7 @@ async function sendMessage(chatId, text, replyMarkup = null) {
 
   async function sendWithRetry(body, retries = 0) {
     try {
+      console.log(`[sendMessage] Attempt ${retries + 1}/${MAX_RETRIES} - Connecting to ${BALE_API}/sendMessage`);
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), TIMEOUT);
       
@@ -289,14 +290,17 @@ async function sendMessage(chatId, text, replyMarkup = null) {
       });
       
       clearTimeout(timeoutId);
+      console.log(`[sendMessage] Response received with status: ${res.status}`);
       return res.json();
     } catch (error) {
+      console.error(`[sendMessage] Error on attempt ${retries + 1}: ${error.message}`);
       if (retries < MAX_RETRIES) {
         const waitTime = Math.min(5000 * Math.pow(2, retries), 30000); // max 30 sec
         console.log(`⚠️ Retry ${retries + 1}/${MAX_RETRIES} for sendMessage (waiting ${waitTime}ms)...`);
         await new Promise(r => setTimeout(r, waitTime));
         return sendWithRetry(body, retries + 1);
       }
+      console.error(`[sendMessage] All ${MAX_RETRIES} attempts failed`);
       throw error;
     }
   }
