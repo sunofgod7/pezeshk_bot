@@ -784,7 +784,7 @@ module.exports = async (req, res) => {
     // Helper function to send message with error handling
     async function safeSendMessage(chatId, text, replyMarkup = null) {
       try {
-        return await safeSendMessage(chatId, text, replyMarkup);
+        return await sendMessage(chatId, text, replyMarkup);
       } catch (error) {
         console.error(`[safeSendMessage] Failed to send message to ${chatId}: ${error.message}`);
         console.error(`[safeSendMessage] Error type: ${error.code || error.type || 'unknown'}`);
