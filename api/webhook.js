@@ -1,12 +1,125 @@
 const fetch = require("node-fetch");
 
 const BALE_TOKEN = process.env.BALE_TOKEN;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+// ---------- API Key Management ----------
+// جمع‌آوری تمام API Keyها از environment variables
+const GEMINI_API_KEYS = [];
+let currentKeyIndex = 0;
+
+// خواندن تمام کلیدهای GEMINI_API_KEY_* از environment
+for (let i = 1; i <= 100; i++) {
+  const key = process.env[`GEMINI_API_KEY_${i}`];
+  if (key) {
+    GEMINI_API_KEYS.push({
+      key: key,
+      index: i,
+      failCount: 0,
+      lastFailTime: null,
+    });
+  }
+}
+
+// اگر کلید شماره‌گذاری نشده وجود داشت، اضافه کن
+if (process.env.GEMINI_API_KEY && !GEMINI_API_KEYS.length) {
+  GEMINI_API_KEYS.push({
+    key: process.env.GEMINI_API_KEY,
+    index: 0,
+    failCount: 0,
+    lastFailTime: null,
+  });
+}
+
+if (!GEMINI_API_KEYS.length) {
+  console.error("❌ هیچ GEMINI_API_KEY پیدا نشد!");
+}
+
+console.log(`✅ تعداد ${GEMINI_API_KEYS.length} API Key بارگذاری شد`);
+
+// دریافت API Key بعدی (Round-Robin)
+function getNextApiKey() {
+  if (!GEMINI_API_KEYS.length) {
+    throw new Error("هیچ API Key موجود نیست");
+  }
+  
+  const apiKey = GEMINI_API_KEYS[currentKeyIndex];
+  currentKeyIndex = (currentKeyIndex + 1) % GEMINI_API_KEYS.length;
+  
+  console.log(`[API Key] استفاده از کلید شماره ${apiKey.index} (${currentKeyIndex}/${GEMINI_API_KEYS.length})`);
+  return apiKey.key;
+}
+
+// علامت‌گذاری کلید به عنوان خطا
+function markKeyAsFailed(usedKey) {
+  const keyObj = GEMINI_API_KEYS.find(k => k.key === usedKey);
+  if (keyObj) {
+    keyObj.failCount++;
+    keyObj.lastFailTime = Date.now();
+    console.log(`⚠️ کلید شماره ${keyObj.index} به خطا خورد (تعداد خطا: ${keyObj.failCount})`);
+  }
+}
+
+// تلاش مجدد با کلید بعدی
+async function callGeminiWithRetry(requestBody, maxRetries = null) {
+  const retries = maxRetries || GEMINI_API_KEYS.length;
+  let lastError = null;
+  
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const apiKey = getNextApiKey();
+      const GEMINI_MODEL = "gemini-3.5-flash";
+      const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+      
+      console.log(`[Gemini] تلاش ${attempt + 1}/${retries}`);
+      
+      const response = await fetch(GEMINI_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+
+      const data = await response.json();
+      
+      // بررسی خطای Quota
+      if (!response.ok) {
+        const errorMsg = data.error?.message || "";
+        
+        // اگر خطای Quota بود، کلید را علامت‌گذاری کن و کلید بعدی را امتحان کن
+        if (
+          errorMsg.includes("quota") ||
+          errorMsg.includes("Quota exceeded") ||
+          errorMsg.includes("rate limit") ||
+          response.status === 429
+        ) {
+          console.log(`⚠️ کلید فعلی به Quota خورد، رفتن به کلید بعدی...`);
+          markKeyAsFailed(apiKey);
+          lastError = new Error(errorMsg);
+          continue; // امتحان کلید بعدی
+        }
+        
+        // خطاهای دیگر را مستقیماً برگردان
+        throw new Error(errorMsg || `خطای Gemini: ${response.status}`);
+      }
+
+      // موفقیت
+      console.log(`✅ درخواست با کلید فعلی موفق بود`);
+      return data;
+      
+    } catch (error) {
+      console.error(`❌ خطا در تلاش ${attempt + 1}:`, error.message);
+      lastError = error;
+      
+      // اگر آخرین تلاش بود، خطا را پرتاب کن
+      if (attempt === retries - 1) {
+        throw lastError;
+      }
+    }
+  }
+  
+  throw lastError || new Error("تمام API Keyها به خطا خوردند");
+}
+
 const BALE_API = `https://tapi.bale.ai/bot${BALE_TOKEN}`;
-
-const GEMINI_MODEL = "gemini-3.5-flash";
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
-
 const userSessions = new Map();
 
 // ---------- helpers ----------
@@ -177,35 +290,25 @@ async function transcribeVoice(fileId) {
     const prompt = "لطفاً این فایل صوتی را به متن فارسی تبدیل کن. فقط متن گفته شده را بنویس، بدون توضیح اضافی.";
 
     console.log("[transcribeVoice] Calling Gemini API...");
-    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: prompt },
-              { inline_data: { mime_type: mime, data: b64 } },
-            ],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.1,
-          topK: 20,
-          topP: 0.8,
-          maxOutputTokens: 2000,
+    const data = await callGeminiWithRetry({
+      contents: [
+        {
+          parts: [
+            { text: prompt },
+            { inline_data: { mime_type: mime, data: b64 } },
+          ],
         },
-      }),
+      ],
+      generationConfig: {
+        temperature: 0.1,
+        topK: 20,
+        topP: 0.8,
+        maxOutputTokens: 2000,
+      },
     });
 
-    console.log(`[transcribeVoice] Gemini response status: ${response.status}`);
-    const data = await response.json();
+    console.log(`[transcribeVoice] Gemini response received`);
     
-    if (!response.ok) {
-      console.error("[transcribeVoice] Gemini error:", JSON.stringify(data));
-      throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
-    }
-
     if (data.candidates?.[0]?.content) {
       const transcription = data.candidates[0].content.parts[0].text.trim();
       console.log(`[transcribeVoice] Success, transcription: ${transcription.substring(0, 100)}...`);
@@ -243,25 +346,15 @@ async function getGeminiResponse(chatId, userMessage) {
 
 ${conversationHistory ? "تاریخچه مکالمه:\n" + conversationHistory + "\n\n" : ""}پیام جدید بیمار: ${userMessage}`;
 
-    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: systemPrompt }] }],
-        generationConfig: {
-          temperature: 0.7,
-          topK: 40,
-          topP: 0.95,
-          maxOutputTokens: 5000,
-        },
-      }),
+    const data = await callGeminiWithRetry({
+      contents: [{ parts: [{ text: systemPrompt }] }],
+      generationConfig: {
+        temperature: 0.7,
+        topK: 40,
+        topP: 0.95,
+        maxOutputTokens: 5000,
+      },
     });
-
-    const data = await response.json();
-    if (!response.ok) {
-      console.error("Gemini text error:", JSON.stringify(data));
-      return `خطا: ${data.error?.message || "مشکل در ارتباط با Gemini"}`;
-    }
 
     if (data.candidates?.[0]?.content) {
       const aiResponse = data.candidates[0].content.parts[0].text;
@@ -287,32 +380,22 @@ async function analyzeImageWithGemini(fileId, prompt) {
 
   console.log(`Image ready: ${bytes.length} bytes, mime: ${mime}`);
 
-  const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [
-        {
-          parts: [
-            { text: prompt },
-            { inline_data: { mime_type: mime, data: b64 } },
-          ],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.7,
-        topK: 40,
-        topP: 0.95,
-        maxOutputTokens: 5000,
+  const data = await callGeminiWithRetry({
+    contents: [
+      {
+        parts: [
+          { text: prompt },
+          { inline_data: { mime_type: mime, data: b64 } },
+        ],
       },
-    }),
+    ],
+    generationConfig: {
+      temperature: 0.7,
+      topK: 40,
+      topP: 0.95,
+      maxOutputTokens: 5000,
+    },
   });
-
-  const data = await response.json();
-  if (!response.ok) {
-    console.error("Gemini vision error:", JSON.stringify(data));
-    throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
-  }
 
   if (data.candidates?.[0]?.content) {
     return data.candidates[0].content.parts[0].text;
