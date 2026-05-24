@@ -5,7 +5,6 @@ const BALE_TOKEN = process.env.BALE_TOKEN;
 // ---------- API Key Management ----------
 // جمع‌آوری تمام API Keyها از environment variables
 const GEMINI_API_KEYS = [];
-let currentKeyIndex = 0;
 
 // خواندن تمام کلیدهای GEMINI_API_KEY_* از environment
 for (let i = 1; i <= 100; i++) {
@@ -36,87 +35,70 @@ if (!GEMINI_API_KEYS.length) {
 
 console.log(`✅ تعداد ${GEMINI_API_KEYS.length} API Key بارگذاری شد`);
 
-// دریافت API Key بعدی (Round-Robin)
-function getNextApiKey() {
-  if (!GEMINI_API_KEYS.length) {
-    throw new Error("هیچ API Key موجود نیست");
-  }
-  
-  const apiKey = GEMINI_API_KEYS[currentKeyIndex];
-  currentKeyIndex = (currentKeyIndex + 1) % GEMINI_API_KEYS.length;
-  
-  console.log(`[API Key] استفاده از کلید شماره ${apiKey.index} (${currentKeyIndex}/${GEMINI_API_KEYS.length})`);
-  return apiKey.key;
-}
+// مدل‌های مختلف برای انواع درخواست
+const TEXT_MODELS = ["gemini-3.1-flash-lite"];
+const MEDIA_MODELS = ["gemini-3.5-flash", "gemini-3.0-flash", "gemini-2.5-flash"];
 
-// علامت‌گذاری کلید به عنوان خطا
-function markKeyAsFailed(usedKey) {
-  const keyObj = GEMINI_API_KEYS.find(k => k.key === usedKey);
-  if (keyObj) {
-    keyObj.failCount++;
-    keyObj.lastFailTime = Date.now();
-    console.log(`⚠️ کلید شماره ${keyObj.index} به خطا خورد (تعداد خطا: ${keyObj.failCount})`);
-  }
-}
-
-// تلاش مجدد با کلید بعدی
-async function callGeminiWithRetry(requestBody, maxRetries = null) {
-  const retries = maxRetries || GEMINI_API_KEYS.length;
+// تلاش مجدد با کلیدها و مدل‌های مختلف
+async function callGeminiWithRetry(requestBody, isMediaRequest = false) {
+  const models = isMediaRequest ? MEDIA_MODELS : TEXT_MODELS;
   let lastError = null;
   
-  for (let attempt = 0; attempt < retries; attempt++) {
-    try {
-      const apiKey = getNextApiKey();
-      const GEMINI_MODEL = "gemini-3.5-flash";
-      const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+  // برای هر API Key
+  for (let keyIndex = 0; keyIndex < GEMINI_API_KEYS.length; keyIndex++) {
+    const apiKeyObj = GEMINI_API_KEYS[keyIndex];
+    
+    // برای هر مدل
+    for (let modelIndex = 0; modelIndex < models.length; modelIndex++) {
+      const model = models[modelIndex];
       
-      console.log(`[Gemini] تلاش ${attempt + 1}/${retries}`);
-      
-      const response = await fetch(GEMINI_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestBody),
-      });
-
-      const data = await response.json();
-      
-      // بررسی خطای Quota
-      if (!response.ok) {
-        const errorMsg = data.error?.message || "";
+      try {
+        const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKeyObj.key}`;
         
-        // اگر خطای Quota بود، کلید را علامت‌گذاری کن و کلید بعدی را امتحان کن
-        if (
-          errorMsg.includes("quota") ||
-          errorMsg.includes("Quota exceeded") ||
-          errorMsg.includes("rate limit") ||
-          response.status === 429
-        ) {
-          console.log(`⚠️ کلید فعلی به Quota خورد، رفتن به کلید بعدی...`);
-          markKeyAsFailed(apiKey);
-          lastError = new Error(errorMsg);
-          continue; // امتحان کلید بعدی
+        console.log(`[Gemini] کلید ${apiKeyObj.index}, مدل ${model} (${keyIndex + 1}/${GEMINI_API_KEYS.length}, ${modelIndex + 1}/${models.length})`);
+        
+        const response = await fetch(GEMINI_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(requestBody),
+        });
+
+        const data = await response.json();
+        
+        // بررسی خطای Quota
+        if (!response.ok) {
+          const errorMsg = data.error?.message || "";
+          
+          // اگر خطای Quota بود، مدل بعدی را امتحان کن
+          if (
+            errorMsg.includes("quota") ||
+            errorMsg.includes("Quota exceeded") ||
+            errorMsg.includes("rate limit") ||
+            response.status === 429
+          ) {
+            console.log(`⚠️ کلید ${apiKeyObj.index} با مدل ${model} به Quota خورد`);
+            apiKeyObj.failCount++;
+            apiKeyObj.lastFailTime = Date.now();
+            lastError = new Error(errorMsg);
+            continue; // امتحان مدل بعدی
+          }
+          
+          // خطاهای دیگر را مستقیماً برگردان
+          throw new Error(errorMsg || `خطای Gemini: ${response.status}`);
         }
-        
-        // خطاهای دیگر را مستقیماً برگردان
-        throw new Error(errorMsg || `خطای Gemini: ${response.status}`);
-      }
 
-      // موفقیت
-      console.log(`✅ درخواست با کلید فعلی موفق بود`);
-      return data;
-      
-    } catch (error) {
-      console.error(`❌ خطا در تلاش ${attempt + 1}:`, error.message);
-      lastError = error;
-      
-      // اگر آخرین تلاش بود، خطا را پرتاب کن
-      if (attempt === retries - 1) {
-        throw lastError;
+        // موفقیت
+        console.log(`✅ درخواست با کلید ${apiKeyObj.index} و مدل ${model} موفق بود`);
+        return data;
+        
+      } catch (error) {
+        console.error(`❌ خطا با کلید ${apiKeyObj.index} و مدل ${model}:`, error.message);
+        lastError = error;
       }
     }
   }
   
-  throw lastError || new Error("تمام API Keyها به خطا خوردند");
+  throw lastError || new Error("تمام API Keyها و مدل‌ها به خطا خوردند");
 }
 
 const BALE_API = `https://tapi.bale.ai/bot${BALE_TOKEN}`;
@@ -305,7 +287,7 @@ async function transcribeVoice(fileId) {
         topP: 0.8,
         maxOutputTokens: 2000,
       },
-    });
+    }, true); // true = media request
 
     console.log(`[transcribeVoice] Gemini response received`);
     
@@ -354,7 +336,7 @@ ${conversationHistory ? "تاریخچه مکالمه:\n" + conversationHistory +
         topP: 0.95,
         maxOutputTokens: 5000,
       },
-    });
+    }, false); // false = text request
 
     if (data.candidates?.[0]?.content) {
       const aiResponse = data.candidates[0].content.parts[0].text;
@@ -395,7 +377,7 @@ async function analyzeImageWithGemini(fileId, prompt) {
       topP: 0.95,
       maxOutputTokens: 5000,
     },
-  });
+  }, true); // true = media request
 
   if (data.candidates?.[0]?.content) {
     return data.candidates[0].content.parts[0].text;
@@ -441,114 +423,25 @@ async function analyzeMRIImage(fileId) {
 فقط فارسی بنویس و از Markdown و ایموجی استفاده کن.`;
 
     console.log("[analyzeMRIImage] Calling Gemini API...");
-    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: prompt },
-              { inline_data: { mime_type: mime, data: b64 } },
-            ],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.4,
-          topK: 32,
-          topP: 0.9,
-          maxOutputTokens: 5000,
+    const data = await callGeminiWithRetry({
+      contents: [
+        {
+          parts: [
+            { text: prompt },
+            { inline_data: { mime_type: mime, data: b64 } },
+          ],
         },
-      }),
-    });
+      ],
+      generationConfig: {
+        temperature: 0.4,
+        topK: 32,
+        topP: 0.9,
+        maxOutputTokens: 5000,
+      },
+    }, true); // true = media request
 
-    console.log(`[analyzeMRIImage] Gemini response status: ${response.status}`);
-    const data = await response.json();
+    console.log(`[analyzeMRIImage] Gemini response received`);
     
-    if (!response.ok) {
-      console.error("[analyzeMRIImage] Gemini error:", JSON.stringify(data));
-      throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
-    }
-
-    if (data.candidates?.[0]?.content) {
-      const result = data.candidates[0].content.parts[0].text;
-      console.log(`[analyzeMRIImage] Success, result length: ${result.length}`);
-      return result;
-    }
-    
-    console.error("[analyzeMRIImage] No content in response:", JSON.stringify(data));
-    throw new Error("پاسخی از Gemini دریافت نشد");
-  } catch (error) {
-    console.error("[analyzeMRIImage] Exception:", error.message, error.stack);
-    throw error;
-  }
-}
-
-// ---------- MRI/Radiology analysis ----------
-async function analyzeMRIImage(fileId) {
-  try {
-    console.log("[analyzeMRIImage] Starting...");
-    const { bytes, mime: ct, path } = await getFileBytes(fileId);
-    console.log(`[analyzeMRIImage] File downloaded: ${bytes.length} bytes`);
-    
-    const mime = guessMime(path, ct);
-    const b64 = toBase64(bytes);
-    console.log(`[analyzeMRIImage] Base64 encoded, mime: ${mime}`);
-
-    const prompt = `تو یک رادیولوژیست و متخصص تصویربرداری پزشکی هستی که تصاویر MRI، CT Scan، رادیوگرافی و سایر تصاویر رادیولوژی را به زبان فارسی تحلیل می‌کنی.
-
-از روی تصویر رادیولوژی:
-۱) 🔍 **نوع تصویربرداری**: مشخص کن این تصویر چه نوع تصویربرداری است (MRI، CT، X-Ray، سونوگرافی و...)
-۲) 🎯 **ناحیه بدن**: کدام قسمت از بدن تصویربرداری شده (مغز، ستون فقرات، زانو، قفسه سینه و...)
-۳) 📊 **یافته‌های طبیعی**: ساختارهای طبیعی و سالم که در تصویر دیده می‌شوند
-۴) ⚠️ **یافته‌های غیرطبیعی**: هر گونه ناهنجاری، آسیب، تومور، التهاب یا مشکل که مشاهده می‌شود
-۵) 🔬 **تفسیر بالینی**: این یافته‌ها چه معنایی دارند و ممکن است نشانه چه بیماری‌هایی باشند
-۶) 💡 **توصیه‌های بعدی**: 
-   - آیا نیاز به تصویربرداری تکمیلی است؟
-   - آیا باید به متخصص خاصی مراجعه شود؟
-   - آیا نیاز به آزمایش‌های بیشتر است؟
-۷) 📋 **سطح اورژانسی**: آیا یافته‌ها نیاز به مراجعه فوری دارند یا می‌توان در نوبت عادی پیگیری کرد
-
-**نکات مهم:**
-- اگر تصویر واضح نیست یا کیفیت پایین است، صادقانه بگو
-- اگر یافته‌های مشکوک یا نگران‌کننده دیدی، تاکید کن که حتماً به پزشک مراجعه شود
-- از زبان ساده و قابل فهم استفاده کن
-- در صورت عدم قطعیت، احتمالات مختلف را ذکر کن
-
-در انتها این هشدار را بیاور: «⚠️ این تحلیل صرفاً جنبه‌ی آموزشی دارد و جایگزین نظر رادیولوژیست و پزشک معالج نیست. حتماً با پزشک متخصص خود مشورت کنید.»
-
-فقط فارسی بنویس و از Markdown و ایموجی استفاده کن.`;
-
-    console.log("[analyzeMRIImage] Calling Gemini API...");
-    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: prompt },
-              { inline_data: { mime_type: mime, data: b64 } },
-            ],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.4,
-          topK: 32,
-          topP: 0.9,
-          maxOutputTokens: 5000,
-        },
-      }),
-    });
-
-    console.log(`[analyzeMRIImage] Gemini response status: ${response.status}`);
-    const data = await response.json();
-    
-    if (!response.ok) {
-      console.error("[analyzeMRIImage] Gemini error:", JSON.stringify(data));
-      throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
-    }
-
     if (data.candidates?.[0]?.content) {
       const result = data.candidates[0].content.parts[0].text;
       console.log(`[analyzeMRIImage] Success, result length: ${result.length}`);
@@ -594,35 +487,25 @@ async function analyzeMedicineImage(fileId) {
 فقط فارسی بنویس و از Markdown و ایموجی استفاده کن.`;
 
     console.log("[analyzeMedicineImage] Calling Gemini API...");
-    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: prompt },
-              { inline_data: { mime_type: mime, data: b64 } },
-            ],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.5,
-          topK: 32,
-          topP: 0.9,
-          maxOutputTokens: 5000,
+    const data = await callGeminiWithRetry({
+      contents: [
+        {
+          parts: [
+            { text: prompt },
+            { inline_data: { mime_type: mime, data: b64 } },
+          ],
         },
-      }),
-    });
+      ],
+      generationConfig: {
+        temperature: 0.5,
+        topK: 32,
+        topP: 0.9,
+        maxOutputTokens: 5000,
+      },
+    }, true); // true = media request
 
-    console.log(`[analyzeMedicineImage] Gemini response status: ${response.status}`);
-    const data = await response.json();
+    console.log(`[analyzeMedicineImage] Gemini response received`);
     
-    if (!response.ok) {
-      console.error("[analyzeMedicineImage] Gemini error:", JSON.stringify(data));
-      throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
-    }
-
     if (data.candidates?.[0]?.content) {
       const result = data.candidates[0].content.parts[0].text;
       console.log(`[analyzeMedicineImage] Success, result length: ${result.length}`);
@@ -661,28 +544,18 @@ async function analyzeMedicineText(medicineText) {
 فقط فارسی بنویس و از Markdown و ایموجی استفاده کن.`;
 
     console.log("[analyzeMedicineText] Calling Gemini API...");
-    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.5,
-          topK: 32,
-          topP: 0.9,
-          maxOutputTokens: 5000,
-        },
-      }),
-    });
+    const data = await callGeminiWithRetry({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.5,
+        topK: 32,
+        topP: 0.9,
+        maxOutputTokens: 5000,
+      },
+    }, false); // false = text request
 
-    console.log(`[analyzeMedicineText] Gemini response status: ${response.status}`);
-    const data = await response.json();
+    console.log(`[analyzeMedicineText] Gemini response received`);
     
-    if (!response.ok) {
-      console.error("[analyzeMedicineText] Gemini error:", JSON.stringify(data));
-      throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
-    }
-
     if (data.candidates?.[0]?.content) {
       const result = data.candidates[0].content.parts[0].text;
       console.log(`[analyzeMedicineText] Success, result length: ${result.length}`);
@@ -722,35 +595,25 @@ async function analyzeLabTestImage(fileId) {
 فقط فارسی بنویس و از Markdown ساده استفاده کن.`;
 
     console.log("[analyzeLabTestImage] Calling Gemini API...");
-    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: prompt },
-              { inline_data: { mime_type: mime, data: b64 } },
-            ],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.5,
-          topK: 32,
-          topP: 0.9,
-          maxOutputTokens: 5000,
+    const data = await callGeminiWithRetry({
+      contents: [
+        {
+          parts: [
+            { text: prompt },
+            { inline_data: { mime_type: mime, data: b64 } },
+          ],
         },
-      }),
-    });
+      ],
+      generationConfig: {
+        temperature: 0.5,
+        topK: 32,
+        topP: 0.9,
+        maxOutputTokens: 5000,
+      },
+    }, true); // true = media request
 
-    console.log(`[analyzeLabTestImage] Gemini response status: ${response.status}`);
-    const data = await response.json();
+    console.log(`[analyzeLabTestImage] Gemini response received`);
     
-    if (!response.ok) {
-      console.error("[analyzeLabTestImage] Gemini error:", JSON.stringify(data));
-      throw new Error(data.error?.message || `خطای Gemini: ${response.status}`);
-    }
-
     if (data.candidates?.[0]?.content) {
       const result = data.candidates[0].content.parts[0].text;
       console.log(`[analyzeLabTestImage] Success, result length: ${result.length}`);
@@ -1087,35 +950,21 @@ module.exports = async (req, res) => {
         }
       } else if (session.labTestMode) {
         try {
-          const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [
-                {
-                  parts: [
-                    {
-                      text: `تو یک دکتر متخصص آزمایشگاه هستی. نتایج آزمایش را تحلیل کن، مقادیر غیرطبیعی را مشخص کن، توضیح ساده بده و توصیه‌های لازم را ارائه کن.\n\nنتایج: ${userMessage}`,
-                    },
-                  ],
-                },
-              ],
-              generationConfig: {
-                temperature: 0.7,
-                topK: 32,
-                topP: 0.9,
-                maxOutputTokens: 5000,
-              },
-            }),
-          });
-          const data = await response.json();
-          if (!response.ok) {
-            console.error("Lab test text error:", JSON.stringify(data));
-            await sendMessage(
-              chatId,
-              `خطا: ${data.error?.message || "مشکل در تحلیل"}`,
-            );
-          } else if (data.candidates?.[0]?.content) {
+          await sendMessage(chatId, "⏳ در حال تحلیل آزمایش...");
+          
+          const prompt = `تو یک دکتر متخصص آزمایشگاه هستی. نتایج آزمایش را تحلیل کن، مقادیر غیرطبیعی را مشخص کن، توضیح ساده بده و توصیه‌های لازم را ارائه کن.\n\nنتایج: ${userMessage}`;
+          
+          const data = await callGeminiWithRetry({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: 0.7,
+              topK: 32,
+              topP: 0.9,
+              maxOutputTokens: 5000,
+            },
+          }, false); // false = text request
+          
+          if (data.candidates?.[0]?.content) {
             await sendMessage(
               chatId,
               "🔬 تحلیل آزمایش:\n\n" +
