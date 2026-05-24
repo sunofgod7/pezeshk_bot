@@ -772,11 +772,14 @@ module.exports = async (req, res) => {
       try {
         return await sendMessage(chatId, text, replyMarkup);
       } catch (error) {
-        console.error(`[safeSendMessage] Failed to send message: ${error.message}`);
+        console.error(`[safeSendMessage] Failed to send message to ${chatId}: ${error.message}`);
+        console.error(`[safeSendMessage] Error type: ${error.code || error.type || 'unknown'}`);
         // Don't throw, just log - webhook should always return 200
         return { ok: false, error: error.message };
       }
     }
+
+    console.log(`[Webhook] Received message from chat ${chatId}`);
 
     // عکس
     if (update.message.photo) {
