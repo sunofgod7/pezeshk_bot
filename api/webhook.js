@@ -1,10 +1,6 @@
 const fetch = require("node-fetch");
-const dns = require('dns').promises;
 
 const BALE_TOKEN = process.env.BALE_TOKEN;
-
-// تنظیم DNS برای بهبود اتصال
-dns.setServers(['8.8.8.8', '1.1.1.1', '178.22.122.100', '185.51.200.2']);
 
 // ---------- API Key Management ----------
 // جمع‌آوری تمام API Keyها از environment variables
@@ -193,8 +189,8 @@ function guessMime(path, current) {
 }
 
 async function getFileBytes(fileId) {
-  const MAX_RETRIES = 5;
-  const TIMEOUT = 60000;
+  const MAX_RETRIES = 3;
+  const TIMEOUT = 15000;
   
   async function fetchWithRetry(url, retries = 0) {
     try {
@@ -203,14 +199,12 @@ async function getFileBytes(fileId) {
       
       const response = await fetch(url, { 
         signal: controller.signal,
-        timeout: TIMEOUT,
-        headers: { "Connection": "keep-alive" }
       });
       clearTimeout(timeoutId);
       return response;
     } catch (error) {
       if (retries < MAX_RETRIES) {
-        const waitTime = Math.min(5000 * Math.pow(2, retries), 30000);
+        const waitTime = 2000 * (retries + 1);
         console.log(`⚠️ Retry ${retries + 1}/${MAX_RETRIES} for fetch (waiting ${waitTime}ms)...`);
         await new Promise(r => setTimeout(r, waitTime));
         return fetchWithRetry(url, retries + 1);
@@ -269,12 +263,12 @@ async function getFileBytes(fileId) {
 // ---------- Bale sendMessage ----------
 async function sendMessage(chatId, text, replyMarkup = null) {
   const MAX_LENGTH = 3500;
-  const MAX_RETRIES = 5; // افزایش به 5
-  const TIMEOUT = 60000; // افزایش به 60 ثانیه
+  const MAX_RETRIES = 3;
+  const TIMEOUT = 15000; // 15 seconds
 
   async function sendWithRetry(body, retries = 0) {
     try {
-      console.log(`[sendMessage] Attempt ${retries + 1}/${MAX_RETRIES} - Connecting to ${BALE_API}/sendMessage`);
+      console.log(`[sendMessage] Attempt ${retries + 1}/${MAX_RETRIES} - Connecting to Bale API`);
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), TIMEOUT);
       
@@ -282,11 +276,9 @@ async function sendMessage(chatId, text, replyMarkup = null) {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
-          "Connection": "keep-alive"
         },
         body: JSON.stringify(body),
         signal: controller.signal,
-        timeout: TIMEOUT,
       });
       
       clearTimeout(timeoutId);
@@ -295,7 +287,7 @@ async function sendMessage(chatId, text, replyMarkup = null) {
     } catch (error) {
       console.error(`[sendMessage] Error on attempt ${retries + 1}: ${error.message}`);
       if (retries < MAX_RETRIES) {
-        const waitTime = Math.min(5000 * Math.pow(2, retries), 30000); // max 30 sec
+        const waitTime = 2000 * (retries + 1);
         console.log(`⚠️ Retry ${retries + 1}/${MAX_RETRIES} for sendMessage (waiting ${waitTime}ms)...`);
         await new Promise(r => setTimeout(r, waitTime));
         return sendWithRetry(body, retries + 1);
